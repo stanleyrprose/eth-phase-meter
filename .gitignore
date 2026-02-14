@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# 环境变量（含密钥，勿提交）
+.env
+eth-phase-meter.env
+/etc/eth-phase-meter.env
+
+# 报告输出
+eth_reports/
+*.xlsx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Virtual env
+venv/
+.venv/
+env/
