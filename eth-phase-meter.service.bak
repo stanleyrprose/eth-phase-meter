@@ -1,7 +1,5 @@
 [Unit]
-StartLimitIntervalSec=300
-StartLimitBurst=3
-Description=ETH Phase Meter - 每12小时自动分析
+Description=ETH Phase Meter - 每4小时自动分析
 After=network-online.target
 Wants=network-online.target
 
@@ -9,7 +7,7 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=/etc/eth-phase-meter.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 /root/.openclaw/workspace/eth_phase_meter.py --daemon --interval=12
+ExecStart=/usr/bin/python3 /root/.openclaw/workspace/eth_phase_meter.py --daemon --interval=4
 WorkingDirectory=/root/.openclaw/workspace
 Restart=on-failure
 RestartSec=30

@@ -1169,10 +1169,60 @@ def fetch_econ_calendar():
 
 
 # ─── CryptoPanic 加密新闻（恢复） ───
+# 需求：阶段仪仍按 interval 推送；但 CryptoPanic API 只每天拉取一次。
+# 做法：将 CryptoPanic 结果缓存到本地文件，并用 24h TTL 节流；未到 TTL 时复用旧新闻。
+
+def _cryptopanic_cache_path() -> str:
+    try:
+        base = os.path.join(os.path.dirname(__file__), "eth_reports", "cache")
+    except Exception:
+        base = os.path.join(os.getcwd(), "eth_reports", "cache")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, "cryptopanic_eth.json")
+
+
+def _load_cryptopanic_cache(max_age_seconds: int = 86400):
+    path = _cryptopanic_cache_path()
+    try:
+        if not os.path.exists(path):
+            return None
+        mtime = os.path.getmtime(path)
+        if (time.time() - mtime) > max_age_seconds:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_cryptopanic_cache(payload: dict):
+    path = _cryptopanic_cache_path()
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
 def fetch_crypto_news():
-    """获取 ETH 相关新闻 + 情绪（CryptoPanic API developer/v2）"""
+    """获取 ETH 相关新闻 + 情绪（CryptoPanic API developer/v2）。
+
+    注意：为了降低 API 调用频率，本函数会优先读取 24h 内缓存。
+    """
+    # 1) 没 key：走 Finnhub（现有逻辑）
     if not CRYPTOPANIC_API_KEY:
         return _fetch_crypto_news_finnhub()
+
+    # 2) 有缓存且未过期：直接复用旧新闻
+    cached = _load_cryptopanic_cache(max_age_seconds=86400)
+    if cached:
+        cached["cached"] = True
+        cached.setdefault("source", "CryptoPanic")
+        return cached
+
+    # 3) 缓存过期：当天第一次才请求 CryptoPanic
     try:
         url = "https://cryptopanic.com/api/developer/v2/posts/"
         params = {
@@ -1189,11 +1239,11 @@ def fetch_crypto_news():
 
         # Developer 级别只有 title+description，用关键词做情绪
         bullish_words = ["surge", "soar", "rally", "bullish", "pump", "gain", "record",
-                          "approval", "adopt", "milestone", "breakout", "recovery",
-                          "upgrade", "accumulating", "inflow", "all-time", "support"]
+                         "approval", "adopt", "milestone", "breakout", "recovery",
+                         "upgrade", "accumulating", "inflow", "all-time", "support"]
         bearish_words = ["crash", "plunge", "dump", "bearish", "fall", "drop", "ban",
-                          "hack", "exploit", "lawsuit", "sell-off", "decline", "fear",
-                          "collapse", "risk", "outflow", "liquidat", "warning"]
+                         "hack", "exploit", "lawsuit", "sell-off", "decline", "fear",
+                         "collapse", "risk", "outflow", "liquidat", "warning"]
 
         bullish = 0
         bearish = 0
@@ -1214,17 +1264,19 @@ def fetch_crypto_news():
             elif bearish > bullish + 1:
                 sentiment = "bearish"
 
-        post_items = [{"title": p.get("title", ""), "source": "CryptoPanic"}
-                      for p in posts]
+        post_items = [{"title": p.get("title", ""), "source": "CryptoPanic"} for p in posts]
 
-        return {
+        payload = {
             "posts": post_items,
             "bullish": bullish,
             "bearish": bearish,
             "total": total,
             "sentiment": sentiment,
             "source": "CryptoPanic",
+            "cached": False,
         }
+        _save_cryptopanic_cache(payload)
+        return payload
     except Exception as e:
         print(f"  [WARN] CryptoPanic 失败: {e}, 回退 Finnhub")
         return _fetch_crypto_news_finnhub()
