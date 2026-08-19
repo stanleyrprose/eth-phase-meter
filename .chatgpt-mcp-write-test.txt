@@ -1,0 +1,4 @@
+ChatGPT GitHub MCP write test
+Date: 2026-08-20
+Purpose: verify branch/file/commit write permissions.
+This file is safe to delete after verification.
