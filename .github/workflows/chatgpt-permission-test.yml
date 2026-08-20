@@ -1,0 +1,11 @@
+name: ChatGPT Permission Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  permission-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify workflow write permission
+        run: echo "GitHub App workflow write permission verified"
