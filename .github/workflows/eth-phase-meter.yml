@@ -54,7 +54,7 @@ jobs:
         run: |
           for name in FRED_API_KEY FINNHUB_API_KEY CRYPTOPANIC_API_KEY ETHERSCAN_API_KEY; do
             if [[ -z "${!name}" ]]; then
-              echo "WARNING: $name is not configured; the corresponding data source will be skipped or use the code's fallback."
+              echo "WARNING: $name is not configured; the corresponding data source will be skipped or use a fallback."
             else
               echo "OK: $name is configured."
             fi
@@ -69,7 +69,7 @@ jobs:
             cryptopanic-${{ runner.os }}-
 
       - name: Run ETH Phase Meter
-        run: python eth_phase_meter.py
+        run: python github_actions_runner.py
 
       - name: Upload generated reports
         if: always()
