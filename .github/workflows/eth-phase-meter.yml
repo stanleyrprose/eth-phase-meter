@@ -17,6 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    env:
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+      CRYPTOPANIC_API_KEY: ${{ secrets.CRYPTOPANIC_API_KEY }}
+      ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+      ETH_FILTER_1H_BY_4H: "1"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,15 +41,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Validate required Telegram secrets
+        shell: bash
+        run: |
+          if [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]]; then
+            echo "ERROR: TG_BOT_TOKEN and TG_CHAT_ID must be configured as GitHub Actions repository secrets."
+            exit 1
+          fi
+
+      - name: Report optional data-source configuration
+        shell: bash
+        run: |
+          for name in FRED_API_KEY FINNHUB_API_KEY CRYPTOPANIC_API_KEY ETHERSCAN_API_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "WARNING: $name is not configured; the corresponding data source will be skipped or use the code's fallback."
+            else
+              echo "OK: $name is configured."
+            fi
+          done
+
+      - name: Restore CryptoPanic cache
+        uses: actions/cache@v4
+        with:
+          path: eth_reports/cache
+          key: cryptopanic-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            cryptopanic-${{ runner.os }}-
+
       - name: Run ETH Phase Meter
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-          CRYPTOPANIC_API_KEY: ${{ secrets.CRYPTOPANIC_API_KEY }}
-          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
-          ETH_FILTER_1H_BY_4H: "1"
         run: python eth_phase_meter.py
 
       - name: Upload generated reports
