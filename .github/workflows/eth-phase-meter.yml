@@ -69,7 +69,7 @@ jobs:
             cryptopanic-${{ runner.os }}-
 
       - name: Run ETH Phase Meter
-        run: python github_actions_runner.py
+        run: python actions_entrypoint.py
 
       - name: Upload generated reports
         if: always()
