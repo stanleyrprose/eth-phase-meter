@@ -1,31 +1,44 @@
-# PRD v1.3 Data Source Contracts
+# ETH Trend Monitor — external data source contracts
 
-Production code runs in GitHub Actions. Secrets and endpoint URLs are injected only through GitHub Secrets.
+Production execution is GitHub Actions. Secrets are injected through repository Actions Secrets only.
 
-## Core sources
+## ETH valuation provider
 
-- Price candles: Binance first, Deribit fallback.
-- Options: Deribit.
-- Fear & Greed: existing Alternative.me collector.
-- Macro: existing FRED/yfinance/DefiLlama collectors.
+Environment: `ETH_VALUATION_API_URL`, optional `ETH_VALUATION_API_TOKEN`.
 
-## Optional ETH-native providers
+Accepted JSON numeric keys (any subset):
 
-The PRD requires Valuation, Capital Flow, and Structural Supply dimensions. These are provider-neutral adapters so the repository is not locked to Glassnode/Dune/Nansen.
+- `mvrv`
+- `nupl`
+- `price_to_realized`
 
-### `ETH_VALUATION_API_URL`
-Expected JSON keys when available: `mvrv`, `nupl`, `price_to_realized`.
+Missing keys reduce Market State coverage; they are never replaced by zero.
 
-### `ETH_FLOW_API_URL`
-Expected keys: `etf_flow_usd`, `exchange_netflow_eth`, `stablecoin_flow_usd`.
+## ETH capital-flow provider
 
-### `ETH_STRUCTURAL_API_URL`
-Expected keys: `staking_netflow_eth`, `net_issuance_eth`, `exchange_balance_change_pct`, `l2_bridge_netflow_eth`.
+Environment: `ETH_FLOW_API_URL`, optional `ETH_FLOW_API_TOKEN`.
 
-Optional bearer tokens use the corresponding `*_API_TOKEN` secrets.
+Accepted numeric keys:
 
-Missing providers remain N/A and reduce dimension/model coverage. The system never converts missing structural data to zero.
+- `etf_flow_usd`
+- `exchange_netflow_eth`
+- `stablecoin_flow_usd`
 
-## ETH Cost Basis / SOPR policy
+Positive exchange net inflow is treated as increased exchange-side liquid supply for state description. It is not hard-coded as a future-price prediction rule.
 
-The repository implements the PRD's Benchmark → Proxy → Validation → Scale gate. A self-developed proxy must not be named ETH-SOPR until benchmark correlation, turning/extreme-zone behavior, and walk-forward incremental value pass validation.
+## ETH structural provider
+
+Environment: `ETH_STRUCTURAL_API_URL`, optional `ETH_STRUCTURAL_API_TOKEN`.
+
+Accepted numeric keys:
+
+- `staking_netflow_eth`
+- `net_issuance_eth`
+- `exchange_balance_change_pct`
+- `l2_bridge_netflow_eth`
+
+These feed Structural Supply state first. Predictive use is allowed only if the walk-forward model ladder shows incremental value.
+
+## Benchmark → Proxy → Validation → Scale
+
+A self-developed ETH cost-basis/SOPR-like proxy must remain Experimental until benchmark validation passes. `eth_trend_v3.eth_proxy_validation.validate_proxy` implements the first correlation/extreme-zone kill gate. A failed proxy must not be labeled ETH-SOPR.
