@@ -68,16 +68,19 @@ jobs:
           restore-keys: |
             cryptopanic-${{ runner.os }}-
 
-      - name: Restore Direction v2 history
+      - name: Restore V3 research history
         uses: actions/cache@v4
         with:
-          path: eth_reports/direction_v2_history.csv
-          key: direction-v2-${{ runner.os }}-${{ github.run_id }}
+          path: eth_reports/v3_history.csv
+          key: eth-v3-history-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            direction-v2-${{ runner.os }}-
+            eth-v3-history-${{ runner.os }}-
 
-      - name: Run ETH Phase Meter
-        run: python actions_entrypoint.py
+      - name: Run V3 unit tests
+        run: python -m unittest discover -s tests -p "test_v3_*.py" -v
+
+      - name: Run ETH Trend Engine V3
+        run: python v3_actions_entrypoint.py
 
       - name: Upload generated reports
         if: always()
