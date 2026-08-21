@@ -16,7 +16,7 @@ from .feature_cluster import cluster_factors
 from .market_state import build_market_state
 from .data_health import assess as assess_data_health
 from .dataset import HORIZONS, load_pit_records, build_labeled_rows, feature_row
-from .forecast import fit_live_probability
+from .model_ladder import select_live_model
 from .calibration import reliability_from_metrics, probability_state
 from .regime import deterministic, fit_hmm
 from .drift import detect_feature_drift
@@ -36,21 +36,23 @@ def _regime_observations(df):
     return rows[:-1], rows[-1]
 
 
-def _current_features(market_state):
+def _current_features(market_state, clusters):
     dims=(market_state or {}).get('dimensions') or {}
-    return {k:(dims.get(k) or {}).get('score') for k in ('trend','valuation','capital_flow','crowding','structural_supply','volatility_risk')}
+    out={k:(dims.get(k) or {}).get('score') for k in ('trend','valuation','capital_flow','crowding','structural_supply','volatility_risk')}
+    for k,v in (clusters or {}).items(): out[f'cluster_{k}']=(v or {}).get('score')
+    return out
 
 
-def _forecast_bundle(records, market_state, health):
-    current=_current_features(market_state); out={}; reliabilities=[]
+def _forecast_bundle(records, market_state, clusters, health):
+    current=_current_features(market_state,clusters); out={}; reliabilities=[]
     for horizon,hours in HORIZONS.items():
         rows=build_labeled_rows(records,hours,timeframe='4h')
-        prob,wf,reason=fit_live_probability(rows,current)
-        metrics=wf.get('metrics') or {}; rel=reliability_from_metrics(metrics,float(health.get('coverage',0)),int(wf.get('sample_size',0)))
+        ladder=select_live_model(rows,current); selected=ladder.get('selected')
+        prob=selected.get('probability') if selected else None; wf=(selected or {}).get('walk_forward') or {}; metrics=wf.get('metrics') or {}; reason='' if selected else 'NO_MODEL_PASSED_VALIDATION_GATE'; rel=reliability_from_metrics(metrics,float(health.get('coverage',0)),int(wf.get('sample_size',0)))
         if health.get('status')=='DATA_INSUFFICIENT': prob=None; reason='DATA_INSUFFICIENT'
         if health.get('stale_sources'): prob=None; reason='STALE_DATA'
         if prob is not None: reliabilities.append(rel)
-        out[horizon]={'probability_up':prob,'state':probability_state(prob),'status':'CALIBRATED' if prob is not None else 'UNAVAILABLE','reliability':rel,'sample_size':wf.get('sample_size',0),'metrics':metrics,'reason':reason}
+        out[horizon]={'probability_up':prob,'state':probability_state(prob),'status':'CALIBRATED' if prob is not None else 'UNAVAILABLE','reliability':rel,'sample_size':wf.get('sample_size',0),'metrics':metrics,'reason':reason,'selected_model':selected.get('name') if selected else None,'model_ladder':ladder.get('candidates',[])}
     overall='High' if reliabilities and all(x=='High' for x in reliabilities) else 'Medium' if reliabilities and any(x in ('High','Medium') for x in reliabilities) else 'Low'
     return out,overall
 
@@ -60,8 +62,8 @@ def run_one(timeframe, history_records):
     OUTPUT.mkdir(parents=True,exist_ok=True); update_history(OUTPUT/'v3_history.csv',result)
     clusters=cluster_factors(factors); market_state=build_market_state(raw,result); health=assess_data_health(raw,result.coverage)
     obs,current=_regime_observations(raw.get('candles')); hmm=fit_hmm(obs,current) if current is not None else {'available':False,'reason':'NO_CANDLES'}; regime=hmm if hmm.get('available') else deterministic(result)
-    forecasts,model_reliability=(_forecast_bundle(history_records,market_state,health) if timeframe=='4h' else ({h:{'probability_up':None,'status':'UNAVAILABLE','reliability':'Low','reason':'PRIMARY_FORECAST_USES_4H'} for h in HORIZONS},'Low'))
-    current_row={k:v for k,v in _current_features(market_state).items()}; historical_rows=[feature_row(r) for r in history_records]; historical_rows=[r for r in historical_rows if r]
+    forecasts,model_reliability=(_forecast_bundle(history_records,market_state,clusters,health) if timeframe=='4h' else ({h:{'probability_up':None,'status':'UNAVAILABLE','reliability':'Low','reason':'PRIMARY_FORECAST_USES_4H'} for h in HORIZONS},'Low'))
+    current_row=_current_features(market_state,clusters); historical_rows=[feature_row(r) for r in history_records]; historical_rows=[r for r in historical_rows if r]
     drift=detect_feature_drift(historical_rows,current_row)
     payload={'timestamp':ts,'timeframe':timeframe,'price':result.price,'rule_direction':result.final_direction,'coverage':result.coverage,'market_state':market_state,'feature_clusters':clusters,'data_health':health,'regime':regime,'forecasts':forecasts,'model_reliability':model_reliability,'crowding':result.crowding,'volatility_risk':result.volatility,'model_drift':drift}
     previous=load_latest_record(f'monitor_state_{timeframe}') or {}; payload['alerts']=build_alerts(payload,previous)
