@@ -1,9 +1,16 @@
-from actions_scoring_patch import apply
+"""GitHub Actions entrypoint for ETH Direction Model v2."""
+from actions_scoring_patch import apply as apply_data_fixes
 
-apply()
+apply_data_fixes()
 
-from github_actions_runner import main
+import eth_phase_meter as meter
+import github_actions_runner as market_fallback
 
+meter.fetch_binance_klines = market_fallback.fetch_market_klines
+meter.fetch_binance_derivatives = market_fallback.fetch_derivatives
+
+from actions_directional_v2 import apply as apply_directional_v2
+apply_directional_v2()
 
 if __name__ == "__main__":
-    main()
+    meter.main()
