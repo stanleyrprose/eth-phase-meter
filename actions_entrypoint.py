@@ -1,4 +1,4 @@
-"""GitHub Actions entrypoint for ETH Direction Model v2."""
+"""GitHub Actions entrypoint for ETH Direction Model v2.1."""
 from actions_scoring_patch import apply as apply_data_fixes
 apply_data_fixes()
 
@@ -12,6 +12,9 @@ apply_directional_v2()
 
 from actions_directional_v2_runtimefix import apply as apply_runtime_fixes
 apply_runtime_fixes()
+
+from actions_directional_v21 import apply as apply_directional_v21
+apply_directional_v21()
 
 if __name__ == "__main__":
     meter.main()
