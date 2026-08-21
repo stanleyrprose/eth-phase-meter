@@ -68,6 +68,14 @@ jobs:
           restore-keys: |
             cryptopanic-${{ runner.os }}-
 
+      - name: Restore Direction v2 history
+        uses: actions/cache@v4
+        with:
+          path: eth_reports/direction_v2_history.csv
+          key: direction-v2-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            direction-v2-${{ runner.os }}-
+
       - name: Run ETH Phase Meter
         run: python actions_entrypoint.py
 
