@@ -1,0 +1,16 @@
+config_version: config-v1
+runtime:
+  standard_environment: github-actions
+  primary_timeframes: [4h, 1h]
+quality:
+  normal_coverage_pct: 70
+  degraded_coverage_pct: 50
+  fail_closed_below_pct: 50
+model:
+  model_version: baseline-rule-v3.1
+  feature_version: features-v3.1
+  probability_forecast_enabled: false
+  calibrated_probability_required: true
+persistence:
+  preferred: postgresql
+  artifact_only_is_degraded: true
