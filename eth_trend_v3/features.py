@@ -10,7 +10,7 @@ def _add(out, family, name, value, weight, source='', status='GOOD'):
 
 def technical(df) -> list[Factor]:
     out=[]; specs=[('MA',10),('MACD',8),('RSI',5),('KDJ',4),('Structure',8),('Trend',5)]
-    if df is None or len(df)<100:
+    if df is None or len(df)<200:
         for n,w in specs: _add(out,'Technical',n,None,w)
         return out
     c,h,l=df.close,df.high,df.low; last=float(c.iloc[-1]); ma20,ma50,ma200=[float(core.sma(c,n).iloc[-1]) for n in (20,50,200)]

@@ -16,19 +16,25 @@ _orig_score_deriv = meter.score_derivatives
 
 
 def _deribit_chart(timeframe="4h", limit=200):
-    resolutions = {"1h": "60", "4h": "240", "1d": "1D"}
-    minutes = {"1h": 60, "4h": 240, "1d": 1440}
-    resolution = resolutions.get(timeframe, "240")
-    mins = minutes.get(timeframe, 240)
+    """Fetch Deribit candles with 4h bars aggregated locally from 1h data."""
+    if timeframe == "1d":
+        source_resolution = "1D"
+        source_minutes = 1440
+        source_limit = limit
+    else:
+        source_resolution = "60"
+        source_minutes = 60
+        source_limit = limit * (4 if timeframe == "4h" else 1) + (8 if timeframe == "4h" else 0)
+
     end_ms = int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
-    start_ms = end_ms - (limit + 10) * mins * 60 * 1000
+    start_ms = end_ms - (source_limit + 10) * source_minutes * 60 * 1000
     payload = meter.safe_get(
         f"{meter.DERIBIT_BASE}/public/get_tradingview_chart_data",
         {
             "instrument_name": "ETH-PERPETUAL",
             "start_timestamp": start_ms,
             "end_timestamp": end_ms,
-            "resolution": resolution,
+            "resolution": source_resolution,
         },
     )
     result = payload.get("result") if isinstance(payload, dict) else None
@@ -43,18 +49,29 @@ def _deribit_chart(timeframe="4h", limit=200):
     n = min(len(ticks), len(opens), len(highs), len(lows), len(closes))
     if n < 2:
         return None
+
     rows = []
-    for i in range(max(0, n - limit), n):
+    for i in range(n):
         close = float(closes[i])
         volume = float(volumes[i]) if i < len(volumes) and volumes[i] is not None else 0.0
         rows.append({
-            "open_time": pd.to_datetime(int(ticks[i]), unit="ms"),
+            "open_time": pd.to_datetime(int(ticks[i]), unit="ms", utc=True),
             "open": float(opens[i]), "high": float(highs[i]),
             "low": float(lows[i]), "close": close, "volume": volume,
             "quote_vol": volume * close,
             "taker_buy_vol": 0.0, "taker_buy_quote": 0.0,
         })
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows).sort_values("open_time").drop_duplicates("open_time")
+
+    if timeframe == "4h":
+        frame = df.set_index("open_time")
+        df = frame.resample("4h", origin="start_day", label="left", closed="left").agg({
+            "open": "first", "high": "max", "low": "min", "close": "last",
+            "volume": "sum", "quote_vol": "sum",
+            "taker_buy_vol": "sum", "taker_buy_quote": "sum",
+        }).dropna(subset=["open", "high", "low", "close"]).reset_index()
+
+    return df.tail(limit).reset_index(drop=True)
 
 
 def fetch_market_klines(symbol="ETHUSDT", interval="4h", limit=200):
