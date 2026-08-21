@@ -63,7 +63,7 @@ jobs:
           restore-keys: |
             eth-monitor-cache-${{ runner.os }}-
       - name: Run monitor
-        run: python scripts/run_monitor.py
+        run: python -m scripts.run_monitor
       - name: Upload run artifacts
         if: always()
         uses: actions/upload-artifact@v4
