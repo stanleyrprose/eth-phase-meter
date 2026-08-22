@@ -1,7 +1,6 @@
 from __future__ import annotations
 import json
 import os
-from pathlib import Path
 
 
 def persistence_mode() -> str:
@@ -9,12 +8,6 @@ def persistence_mode() -> str:
 
 
 def persist_json_record(record_type: str, payload: dict) -> bool:
-    """Best-effort external persistence hook.
-
-    Phase 0 does not pretend PostgreSQL is configured. When DATABASE_URL is absent,
-    callers keep artifact output only and mark persistence degraded. When configured,
-    psycopg is imported lazily and records are appended to a generic JSONB table.
-    """
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
         return False
@@ -30,11 +23,23 @@ def persist_json_record(record_type: str, payload: dict) -> bool:
                         payload JSONB NOT NULL
                     )
                 """)
-                cur.execute(
-                    "INSERT INTO eth_monitor_records(record_type, payload) VALUES (%s, %s::jsonb)",
-                    (record_type, json.dumps(payload, ensure_ascii=False, default=str)),
-                )
+                cur.execute("INSERT INTO eth_monitor_records(record_type, payload) VALUES (%s, %s::jsonb)", (record_type, json.dumps(payload, ensure_ascii=False, default=str)))
             conn.commit()
         return True
     except Exception:
         return False
+
+
+def load_latest_record(record_type: str) -> dict | None:
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        return None
+    try:
+        import psycopg
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT payload FROM eth_monitor_records WHERE record_type=%s ORDER BY created_at DESC LIMIT 1", (record_type,))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception:
+        return None

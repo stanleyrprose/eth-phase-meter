@@ -1,16 +1,45 @@
-config_version: config-v1
+config_version: config-v1.3
 runtime:
   standard_environment: github-actions
   primary_timeframes: [4h, 1h]
+  primary_forecast_timeframe: 4h
 quality:
   normal_coverage_pct: 70
   degraded_coverage_pct: 50
   fail_closed_below_pct: 50
-model:
-  model_version: baseline-rule-v3.1
-  feature_version: features-v3.1
-  probability_forecast_enabled: false
+  stale_blocks_probability: true
+forecast:
+  horizons_hours:
+    3d: 72
+    7d: 168
+    30d: 720
+  min_train_samples: 120
+  min_oos_samples_for_gate: 60
   calibrated_probability_required: true
+  model_ladder:
+    - base-rate
+    - price-momentum
+    - technical-risk
+    - plus-regime
+    - plus-capital-flow
+    - plus-structural
+    - plus-valuation
+regime:
+  engine: hmm
+  fallback: deterministic
+  min_observations: 150
+  candidate_states: 4
+  min_top_posterior_for_stability: 0.55
 persistence:
   preferred: postgresql
   artifact_only_is_degraded: true
+  database_secret: DATABASE_URL
+alerts:
+  probability_shift_abs: 0.12
+  crowding_extreme: 80
+  volatility_extreme: 75
+versions:
+  parser: pit-parser-v1.3
+  feature: features-v1.3
+  model: forecast-baseline-v1.3
+  regime: hmm-regime-v1.3

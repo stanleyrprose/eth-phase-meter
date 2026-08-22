@@ -10,6 +10,8 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,7 +21,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p "test_*.py" -v
       - name: Candidate promotion gate
-        run: python scripts/validate_model.py
+        run: python -m scripts.validate_model
       - uses: actions/upload-artifact@v4
         with:
           name: eth-model-validation-${{ github.run_number }}
