@@ -27,9 +27,9 @@ jobs:
       - name: Unit and regression tests
         run: python -m unittest discover -s tests -p "test_*.py" -v
       - name: Backtest smoke test
-        run: python scripts/run_backtest.py
+        run: python -m scripts.run_backtest
       - name: Model validation smoke test
-        run: python scripts/validate_model.py
+        run: python -m scripts.validate_model
       - name: Secret pattern sanity check
         run: |
           if grep -RInE '(TG_BOT_TOKEN|DATABASE_URL|ETHERSCAN_API_KEY)=[^$<{[:space:]]+' --exclude='*.md' --exclude='env.example' --exclude='.env.example' .; then

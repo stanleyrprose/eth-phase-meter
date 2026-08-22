@@ -21,7 +21,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p "test_*.py" -v
       - name: Candidate promotion gate
-        run: python scripts/validate_model.py
+        run: python -m scripts.validate_model
       - uses: actions/upload-artifact@v4
         with:
           name: eth-model-validation-${{ github.run_number }}
