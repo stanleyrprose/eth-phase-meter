@@ -36,7 +36,7 @@ def _http_session() -> requests.Session:
 
 
 def fetch_deribit_4h_history(days: int = 365, chunk_days: int = 30) -> pd.DataFrame:
-    """Fetch closed ETH-PERPETUAL 4h bars from Deribit in bounded chunks with retries."""
+    """Fetch Deribit 1h candles, aggregate to strict closed 4h ETH-PERPETUAL bars."""
     end = datetime.now(timezone.utc)
     end_hour = end.hour - (end.hour % 4)
     closed_boundary = end.replace(hour=end_hour, minute=0, second=0, microsecond=0)
@@ -44,13 +44,16 @@ def fetch_deribit_4h_history(days: int = 365, chunk_days: int = 30) -> pd.DataFr
     frames: list[pd.DataFrame] = []
     cursor = start
     session = _http_session()
+
+    # Deribit does not support a native 240-minute resolution.
+    # Fetch supported 60-minute candles and aggregate locally to 4h.
     while cursor < closed_boundary:
         chunk_end = min(cursor + timedelta(days=chunk_days), closed_boundary)
         params = {
             "instrument_name": "ETH-PERPETUAL",
             "start_timestamp": int(cursor.timestamp() * 1000),
             "end_timestamp": int(chunk_end.timestamp() * 1000),
-            "resolution": "240",
+            "resolution": "60",
         }
         r = session.get(DERIBIT_URL, params=params, timeout=30)
         r.raise_for_status()
@@ -64,16 +67,41 @@ def fetch_deribit_4h_history(days: int = 365, chunk_days: int = 30) -> pd.DataFr
         if ticks:
             if not (len(ticks) == len(closes) == len(volumes)):
                 raise RuntimeError(
-                    f"Deribit history arrays differ in length: ticks={len(ticks)} close={len(closes)} volume={len(volumes)}"
+                    f"Deribit candle length mismatch: ticks={len(ticks)} close={len(closes)} volume={len(volumes)}"
                 )
             frames.append(pd.DataFrame({"timestamp": ticks, "close": closes, "volume": volumes}))
         cursor = chunk_end
+
     if not frames:
         raise RuntimeError("No Deribit history returned")
-    df = pd.concat(frames, ignore_index=True).drop_duplicates("timestamp").sort_values("timestamp")
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-    df = df[df["timestamp"] < pd.Timestamp(closed_boundary)]
-    return df.reset_index(drop=True)
+
+    hourly = pd.concat(frames, ignore_index=True).drop_duplicates("timestamp").sort_values("timestamp")
+    hourly["timestamp"] = pd.to_datetime(hourly["timestamp"], unit="ms", utc=True)
+    hourly = hourly[hourly["timestamp"] < pd.Timestamp(closed_boundary)].copy()
+    hourly["close"] = pd.to_numeric(hourly["close"], errors="coerce")
+    hourly["volume"] = pd.to_numeric(hourly["volume"], errors="coerce")
+    hourly = hourly.dropna(subset=["close", "volume"])
+
+    # Strict UTC 4h buckets. Keep only buckets with exactly four hourly candles;
+    # this prevents incomplete or gapped 4h observations from entering the HMM.
+    hourly["bucket_4h"] = hourly["timestamp"].dt.floor("4h")
+    grouped = (
+        hourly.groupby("bucket_4h", as_index=False)
+        .agg(
+            timestamp=("bucket_4h", "first"),
+            close=("close", "last"),
+            volume=("volume", "sum"),
+            hourly_count=("timestamp", "count"),
+        )
+    )
+    four_hour = grouped[
+        (grouped["hourly_count"] == 4)
+        & (grouped["timestamp"] < pd.Timestamp(closed_boundary))
+    ][["timestamp", "close", "volume"]]
+
+    if four_hour.empty:
+        raise RuntimeError("No complete 4h bars could be aggregated from Deribit 1h history")
+    return four_hour.reset_index(drop=True)
 
 
 def build_bootstrap_features(bars: pd.DataFrame) -> pd.DataFrame:
@@ -81,6 +109,7 @@ def build_bootstrap_features(bars: pd.DataFrame) -> pd.DataFrame:
     close = pd.to_numeric(df["close"], errors="coerce")
     volume = pd.to_numeric(df["volume"], errors="coerce").clip(lower=0)
     df["log_return"] = np.log(close / close.shift(1))
+    # 48h realized volatility = std of 12 consecutive 4h returns.
     df["realized_volatility"] = df["log_return"].rolling(12, min_periods=12).std(ddof=0)
     df["log_volume_change"] = np.log1p(volume) - np.log1p(volume.shift(1))
     return df[["timestamp", *FEATURES]].replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
