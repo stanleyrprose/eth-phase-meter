@@ -11,6 +11,8 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from hmmlearn.hmm import GaussianHMM
 from sklearn.metrics import adjusted_rand_score
 
@@ -26,15 +28,22 @@ class RobustScalerState:
     scale: list[float]
 
 
+def _http_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(total=4, connect=4, read=4, status=4, backoff_factor=1.0, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=frozenset(["GET"]))
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    return session
+
+
 def fetch_deribit_4h_history(days: int = 365, chunk_days: int = 30) -> pd.DataFrame:
-    """Fetch closed ETH-PERPETUAL 4h bars from Deribit in bounded chunks."""
+    """Fetch closed ETH-PERPETUAL 4h bars from Deribit in bounded chunks with retries."""
     end = datetime.now(timezone.utc)
-    # Exclude the currently forming 4h bucket.
     end_hour = end.hour - (end.hour % 4)
     closed_boundary = end.replace(hour=end_hour, minute=0, second=0, microsecond=0)
     start = closed_boundary - timedelta(days=days)
     frames: list[pd.DataFrame] = []
     cursor = start
+    session = _http_session()
     while cursor < closed_boundary:
         chunk_end = min(cursor + timedelta(days=chunk_days), closed_boundary)
         params = {
@@ -43,7 +52,7 @@ def fetch_deribit_4h_history(days: int = 365, chunk_days: int = 30) -> pd.DataFr
             "end_timestamp": int(chunk_end.timestamp() * 1000),
             "resolution": "240",
         }
-        r = requests.get(DERIBIT_URL, params=params, timeout=30)
+        r = session.get(DERIBIT_URL, params=params, timeout=30)
         r.raise_for_status()
         body = r.json()
         if body.get("error"):
@@ -53,6 +62,10 @@ def fetch_deribit_4h_history(days: int = 365, chunk_days: int = 30) -> pd.DataFr
         closes = result.get("close") or []
         volumes = result.get("volume") or []
         if ticks:
+            if not (len(ticks) == len(closes) == len(volumes)):
+                raise RuntimeError(
+                    f"Deribit history arrays differ in length: ticks={len(ticks)} close={len(closes)} volume={len(volumes)}"
+                )
             frames.append(pd.DataFrame({"timestamp": ticks, "close": closes, "volume": volumes}))
         cursor = chunk_end
     if not frames:
@@ -68,7 +81,6 @@ def build_bootstrap_features(bars: pd.DataFrame) -> pd.DataFrame:
     close = pd.to_numeric(df["close"], errors="coerce")
     volume = pd.to_numeric(df["volume"], errors="coerce").clip(lower=0)
     df["log_return"] = np.log(close / close.shift(1))
-    # 48h realized volatility = std of 12 consecutive 4h returns.
     df["realized_volatility"] = df["log_return"].rolling(12, min_periods=12).std(ddof=0)
     df["log_volume_change"] = np.log1p(volume) - np.log1p(volume.shift(1))
     return df[["timestamp", *FEATURES]].replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
@@ -89,7 +101,6 @@ def apply_robust_scaler(x: np.ndarray, scaler: RobustScalerState) -> np.ndarray:
 
 
 def hmm_parameter_count(n_states: int, n_features: int) -> int:
-    # start probs + transition matrix + diagonal Gaussian means/variances
     return (n_states - 1) + n_states * (n_states - 1) + 2 * n_states * n_features
 
 
@@ -217,29 +228,55 @@ def train_candidates(features: pd.DataFrame) -> dict:
         runs = []
         seqs = []
         models = []
+        successful_seeds = []
+        seed_errors = []
         for seed in SEEDS:
-            model, diag, states = fit_candidate(x_scaled, n_states, seed)
-            runs.append(diag)
-            seqs.append(states)
-            models.append(model)
+            try:
+                model, diag, states = fit_candidate(x_scaled, n_states, seed)
+                runs.append(diag)
+                seqs.append(states)
+                models.append(model)
+                successful_seeds.append(seed)
+            except Exception as exc:
+                seed_errors.append({"seed": seed, "error_type": type(exc).__name__, "message": str(exc)[:500]})
+        if not runs:
+            candidates.append({
+                "n_states": n_states,
+                "successful_seed_count": 0,
+                "failed_seed_count": len(seed_errors),
+                "seed_errors": seed_errors,
+                "passes_descriptive_gate": False,
+                "failure_reason": "ALL_SEEDS_FAILED",
+            })
+            continue
         best_idx = int(np.argmin([r["bic"] for r in runs]))
         best = runs[best_idx]
-        stability = seed_stability(seqs)
-        wf = walk_forward_validation(x_raw, n_states, SEEDS[best_idx])
+        best_seed = successful_seeds[best_idx]
+        stability = seed_stability(seqs) if len(seqs) >= 2 else 0.0
+        try:
+            wf = walk_forward_validation(x_raw, n_states, best_seed)
+            wf_error = None
+        except Exception as exc:
+            wf = []
+            wf_error = {"error_type": type(exc).__name__, "message": str(exc)[:500]}
         wf_ok = len(wf) >= 2 and all(f["converged"] and np.isfinite(f["test_avg_log_likelihood"]) for f in wf)
         occupancy_ok = best["min_occupancy"] >= 0.03
         duration_ok = best["min_expected_duration_bars"] >= 2.0
-        stability_ok = stability >= 0.60
+        stability_ok = len(seqs) >= 2 and stability >= 0.60
         candidate = {
             "n_states": n_states,
-            "best_seed": SEEDS[best_idx],
+            "best_seed": best_seed,
             "best_bic": best["bic"],
             "best_log_likelihood": best["log_likelihood"],
+            "successful_seed_count": len(successful_seeds),
+            "failed_seed_count": len(seed_errors),
+            "seed_errors": seed_errors,
             "seed_stability_ari_median": stability,
             "occupancy_ok": occupancy_ok,
             "duration_ok": duration_ok,
             "seed_stability_ok": stability_ok,
             "walk_forward_ok": wf_ok,
+            "walk_forward_error": wf_error,
             "passes_descriptive_gate": bool(occupancy_ok and duration_ok and stability_ok and wf_ok),
             "best_run": best,
             "walk_forward": wf,
@@ -324,6 +361,9 @@ def render_markdown(report: dict) -> str:
         "|---:|---:|---:|---|---|---|---|",
     ]
     for c in report["candidates"]:
+        if c.get("failure_reason"):
+            lines.append(f"| {c['n_states']} | n/a | n/a | FAIL | FAIL | FAIL | FAIL |")
+            continue
         lines.append(
             f"| {c['n_states']} | {c['best_bic']:.1f} | {c['seed_stability_ari_median']:.3f} | "
             f"{'PASS' if c['occupancy_ok'] else 'FAIL'} | {'PASS' if c['duration_ok'] else 'FAIL'} | "
