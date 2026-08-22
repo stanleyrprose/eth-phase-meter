@@ -10,8 +10,8 @@ DUNE_ETH_STATE_SQL = """
 WITH eth_cex AS (
   SELECT
     COALESCE(SUM(CASE
-      WHEN flow_type = 'inflow' THEN amount
-      WHEN flow_type = 'outflow' THEN -amount
+      WHEN flow_type = 'deposit' THEN amount
+      WHEN flow_type = 'withdrawal' THEN -amount
       ELSE 0 END), 0) AS exchange_netflow_eth
   FROM cex.flows
   WHERE blockchain = 'ethereum'
@@ -21,8 +21,8 @@ WITH eth_cex AS (
 stablecoin_cex AS (
   SELECT
     COALESCE(SUM(CASE
-      WHEN flow_type = 'inflow' THEN amount_usd
-      WHEN flow_type = 'outflow' THEN -amount_usd
+      WHEN flow_type = 'deposit' THEN amount_usd
+      WHEN flow_type = 'withdrawal' THEN -amount_usd
       ELSE 0 END), 0) AS stablecoin_flow_usd
   FROM cex.flows
   WHERE blockchain = 'ethereum'
@@ -63,6 +63,25 @@ def _fetch_json(url_env: str, token_env: str | None = None) -> dict:
         return {"_error": type(exc).__name__}
 
 
+def _safe_http_error(resp: requests.Response, prefix: str) -> dict:
+    message = ""
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict):
+                message = str(err.get("message") or err.get("type") or "")
+            else:
+                message = str(body.get("message") or body.get("error") or "")
+    except Exception:
+        message = (resp.text or "")[:300]
+    return {
+        "_error": prefix,
+        "http_status": resp.status_code,
+        "message": message[:300],
+    }
+
+
 def _dune_execute(sql: str, timeout_seconds: int = 50) -> dict:
     api_key = os.getenv("DUNE_API_KEY")
     if not api_key:
@@ -78,7 +97,8 @@ def _dune_execute(sql: str, timeout_seconds: int = 50) -> dict:
             json={"sql": sql, "performance": "small"},
             timeout=20,
         )
-        r.raise_for_status()
+        if not r.ok:
+            return _safe_http_error(r, "DUNE_EXECUTE_HTTP_ERROR")
         execution_id = r.json().get("execution_id")
         if not execution_id:
             return {"_error": "DUNE_EXECUTION_ID_MISSING"}
@@ -87,42 +107,75 @@ def _dune_execute(sql: str, timeout_seconds: int = 50) -> dict:
         result_url = DUNE_RESULT_URL.format(execution_id=execution_id)
         while time.monotonic() < deadline:
             rr = requests.get(result_url, headers=headers, timeout=20)
-            rr.raise_for_status()
+            if not rr.ok:
+                err = _safe_http_error(rr, "DUNE_RESULT_HTTP_ERROR")
+                err["execution_id"] = execution_id
+                return err
             body = rr.json()
             state = body.get("state")
             if state == "QUERY_STATE_COMPLETED":
                 rows = ((body.get("result") or {}).get("rows") or [])
                 if not rows:
                     return {"_error": "DUNE_EMPTY_RESULT", "execution_id": execution_id}
-                return {**rows[0], "_source": "Dune curated tables", "execution_id": execution_id}
+                return {
+                    **rows[0],
+                    "_source": "Dune curated tables",
+                    "execution_id": execution_id,
+                }
             if state in {"QUERY_STATE_FAILED", "QUERY_STATE_CANCELLED"}:
                 err = body.get("error") or {}
                 return {
                     "_error": "DUNE_QUERY_FAILED",
-                    "message": err.get("message"),
+                    "message": err.get("message") if isinstance(err, dict) else str(err),
                     "execution_id": execution_id,
                 }
             time.sleep(2)
         return {"_error": "DUNE_QUERY_TIMEOUT", "execution_id": execution_id}
+    except requests.RequestException as exc:
+        return {"_error": type(exc).__name__, "message": str(exc)[:300]}
     except Exception as exc:
-        return {"_error": type(exc).__name__}
+        return {"_error": type(exc).__name__, "message": str(exc)[:300]}
 
 
 def _dune_external_state() -> dict:
     row = _dune_execute(DUNE_ETH_STATE_SQL)
     if row.get("_error"):
-        err = {"_error": row.get("_error"), "_source": "Dune", "message": row.get("message")}
+        # Safe diagnostics only: never log API keys or authorization headers.
+        print(
+            "DUNE_STATE_ERROR",
+            {
+                "error": row.get("_error"),
+                "http_status": row.get("http_status"),
+                "message": row.get("message"),
+                "execution_id": row.get("execution_id"),
+            },
+        )
+        err = {
+            "_error": row.get("_error"),
+            "_source": "Dune",
+            "message": row.get("message"),
+            "http_status": row.get("http_status"),
+        }
         return {"valuation": {}, "capital_flow": dict(err), "structural": dict(err)}
 
     capital_flow = {
         "exchange_netflow_eth": row.get("exchange_netflow_eth"),
         "stablecoin_flow_usd": row.get("stablecoin_flow_usd"),
-        "_source": "Dune cex.flows (24h)",
+        "_source": "Dune cex.flows (24h; deposit-positive, withdrawal-negative)",
     }
     structural = {
         "staking_netflow_eth": row.get("staking_netflow_eth"),
         "_source": "Dune staking_ethereum.flows (24h)",
     }
+    print(
+        "DUNE_STATE_OK",
+        {
+            "exchange_netflow_eth": capital_flow.get("exchange_netflow_eth"),
+            "stablecoin_flow_usd": capital_flow.get("stablecoin_flow_usd"),
+            "staking_netflow_eth": structural.get("staking_netflow_eth"),
+            "execution_id": row.get("execution_id"),
+        },
+    )
     return {
         # MVRV/NUPL/realized-value data are intentionally not proxied here.
         "valuation": {},
