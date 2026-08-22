@@ -29,11 +29,31 @@ def _jsonable(value: Any):
 
 
 def payload_hash(payload: Any) -> str:
-    data = json.dumps(_jsonable(payload), sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    data = json.dumps(
+        _jsonable(payload),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
-def build_pit_record(timeframe: str, raw: dict, result, *, market_state=None, clusters=None, data_health=None, regime=None, forecasts=None, drift=None, alerts=None) -> dict:
+def build_pit_record(
+    timeframe: str,
+    raw: dict,
+    result,
+    *,
+    market_state=None,
+    clusters=None,
+    feature_metadata=None,
+    data_health=None,
+    regime=None,
+    forecasts=None,
+    drift=None,
+    anomalies=None,
+    alerts=None,
+) -> dict:
     now = datetime.now(timezone.utc).isoformat()
     normalized = _jsonable(raw)
     return {
@@ -53,15 +73,24 @@ def build_pit_record(timeframe: str, raw: dict, result, *, market_state=None, cl
         },
         "market_state_vector": market_state or {},
         "feature_clusters": clusters or {},
+        "feature_metadata": feature_metadata or [],
         "data_health": data_health or {},
         "regime": regime or {},
         "forecasts": forecasts or {},
         "model_drift": drift or {},
+        "anomalies": anomalies or [],
         "alerts": alerts or [],
         "coverage": result.coverage,
         "stale": bool((data_health or {}).get("stale_sources")),
         "quality_flags": {
-            "data_status": (data_health or {}).get("status") or ("NORMAL" if result.coverage >= 70 else "DEGRADED" if result.coverage >= 50 else "DATA_INSUFFICIENT"),
+            "data_status": (data_health or {}).get("status")
+            or (
+                "NORMAL"
+                if result.coverage >= 70
+                else "DEGRADED"
+                if result.coverage >= 50
+                else "DATA_INSUFFICIENT"
+            ),
             "persistence_mode": "POSTGRES" if os.getenv("DATABASE_URL") else "ARTIFACT_ONLY",
         },
         "parser_version": PARSER_VERSION,
@@ -79,9 +108,15 @@ def write_pit_snapshot(output_dir: Path, timeframe: str, record: dict) -> Path:
     pit_dir.mkdir(parents=True, exist_ok=True)
     stamp = str(record.get("observed_at", "unknown")).replace(":", "-").replace("+", "_")
     path = pit_dir / f"pit_{timeframe}_{stamp}.json"
-    path.write_text(json.dumps(record, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    path.write_text(
+        json.dumps(record, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
     latest = pit_dir / f"pit_{timeframe}_latest.json"
-    latest.write_text(json.dumps(record, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    latest.write_text(
+        json.dumps(record, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
     return path
 
 
