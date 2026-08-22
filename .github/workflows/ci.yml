@@ -11,7 +11,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,6 +26,10 @@ jobs:
         run: python -m compileall -q .
       - name: Unit and regression tests
         run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Backtest smoke test
+        run: python scripts/run_backtest.py
+      - name: Model validation smoke test
+        run: python scripts/validate_model.py
       - name: Secret pattern sanity check
         run: |
           if grep -RInE '(TG_BOT_TOKEN|DATABASE_URL|ETHERSCAN_API_KEY)=[^$<{[:space:]]+' --exclude='*.md' --exclude='env.example' --exclude='.env.example' .; then
