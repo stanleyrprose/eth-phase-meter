@@ -1,0 +1,32 @@
+name: HMM Historical Bootstrap
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '35 3 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Test
+        run: python -m unittest discover -s tests -v
+      - name: Historical HMM bootstrap
+        run: python -m scripts.run_hmm_bootstrap
+      - name: Upload HMM report
+        uses: actions/upload-artifact@v4
+        with:
+          name: hmm-bootstrap-report
+          path: eth_reports/hmm_bootstrap
+          if-no-files-found: error
+          retention-days: 30
