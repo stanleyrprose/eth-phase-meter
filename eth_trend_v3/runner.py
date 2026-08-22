@@ -19,7 +19,7 @@ from .dataset import HORIZONS, REGIME_CODE, load_pit_records, build_labeled_rows
 from .forecast import fit_live_probability
 from .calibration import reliability_from_metrics, probability_state
 from .regime import deterministic, fit_hmm, build_observations_from_pit
-from .drift import detect_feature_drift
+from .drift import detect_feature_drift, assess_model_health
 from .anomaly import detect as detect_anomalies
 from .alerts import build_alerts
 from .dashboard import write_dashboard
@@ -98,6 +98,18 @@ def _anomaly_history(records):
     return history
 
 
+def _fail_closed_unreliable_forecasts(forecasts, model_health):
+    if model_health.get("status") != "MODEL_UNRELIABLE":
+        return forecasts
+    for forecast in forecasts.values():
+        forecast["probability_up"] = None
+        forecast["state"] = "UNAVAILABLE"
+        forecast["status"] = "UNAVAILABLE"
+        forecast["reliability"] = "Low"
+        forecast["reason"] = "MODEL_UNRELIABLE"
+    return forecasts
+
+
 def run_one(timeframe, history_records):
     ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     raw = collect(timeframe)
@@ -142,7 +154,12 @@ def run_one(timeframe, history_records):
     current_row = _current_features(market_state, regime)
     historical_rows = [feature_row(r) for r in history_records]
     historical_rows = [r for r in historical_rows if r]
-    drift = detect_feature_drift(historical_rows, current_row)
+    feature_drift = detect_feature_drift(historical_rows, current_row)
+    model_health = assess_model_health(feature_drift, forecasts, regime)
+    forecasts = _fail_closed_unreliable_forecasts(forecasts, model_health)
+    if model_health.get("status") == "MODEL_UNRELIABLE":
+        model_reliability = "Low"
+
     anomalies = detect_anomalies(raw, _anomaly_history(history_records))
 
     payload = {
@@ -160,12 +177,19 @@ def run_one(timeframe, history_records):
         "model_reliability": model_reliability,
         "crowding": result.crowding,
         "volatility_risk": result.volatility,
-        "model_drift": drift,
+        "model_drift": feature_drift,
+        "model_health": model_health,
         "anomalies": anomalies,
     }
 
     previous = load_latest_record(f"monitor_state_{timeframe}") or {}
     payload["alerts"] = build_alerts(payload, previous, anomalies=anomalies)
+    if model_health.get("status") != "NORMAL":
+        payload["alerts"].append({
+            "level": 3,
+            "type": model_health.get("status"),
+            "message": json.dumps(model_health, ensure_ascii=False, default=str),
+        })
 
     record = build_pit_record(
         timeframe,
@@ -177,7 +201,7 @@ def run_one(timeframe, history_records):
         data_health=health,
         regime=regime,
         forecasts=forecasts,
-        drift=drift,
+        drift={"feature_drift": feature_drift, "model_health": model_health},
         anomalies=anomalies,
         alerts=payload["alerts"],
     )
@@ -238,6 +262,7 @@ def main():
             },
             "forecast_status": {h: v["status"] for h, v in p4["forecasts"].items()},
             "model_reliability": p4["model_reliability"],
+            "model_health": p4["model_health"]["status"],
         },
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
