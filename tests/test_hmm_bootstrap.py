@@ -42,15 +42,23 @@ class HMMBootstrapTests(unittest.TestCase):
         b = np.array([2, 2, 0, 0, 1, 1])
         self.assertAlmostEqual(seed_stability([a, b]), 1.0)
 
-    def test_entropy_is_low_for_confident_and_high_for_uniform(self):
-        self.assertLess(normalized_entropy([0.97, 0.01, 0.01, 0.01]), 0.2)
-        self.assertAlmostEqual(normalized_entropy([0.25, 0.25, 0.25, 0.25]), 1.0, places=6)
+    def test_normalized_entropy_distinguishes_certainty(self):
+        self.assertAlmostEqual(normalized_entropy([1.0, 0.0, 0.0]), 0.0)
+        self.assertAlmostEqual(normalized_entropy([1/3, 1/3, 1/3]), 1.0, places=6)
 
-    def test_state_label_uses_profile_not_state_id(self):
-        bull = label_state_profile({"log_return": 0.003, "realized_volatility": 0.01}, vol_median=0.02)
-        bear = label_state_profile({"log_return": -0.004, "realized_volatility": 0.04}, vol_median=0.02)
-        self.assertEqual(bull, "Low-Vol Bull")
-        self.assertEqual(bear, "High-Vol Bear")
+    def test_state_profile_label_uses_return_and_relative_vol(self):
+        self.assertEqual(
+            label_state_profile({"log_return": 0.004, "realized_volatility": 0.03}, 0.02),
+            "High-Vol Bull",
+        )
+        self.assertEqual(
+            label_state_profile({"log_return": -0.004, "realized_volatility": 0.01}, 0.02),
+            "Low-Vol Bear",
+        )
+        self.assertEqual(
+            label_state_profile({"log_return": 0.0002, "realized_volatility": 0.01}, 0.02),
+            "Low-Vol Sideways",
+        )
 
 
 if __name__ == "__main__":

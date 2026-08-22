@@ -332,15 +332,24 @@ def render_markdown(report: dict) -> str:
     lines += ["", "## Winner", ""]
     if report["winner"]:
         lines.append(f"Candidate: {report['winner']['n_states']}-state HMM (descriptive gate passed).")
-        lines.append(f"Latest regime: {report['winner_latest_label']} (max posterior={report['winner_latest_max_posterior']:.3f}, entropy={report['winner_latest_entropy']:.3f}).")
+        lines.append(
+            f"Latest regime: {report['winner_latest_label']} "
+            f"(max posterior={report['winner_latest_max_posterior']:.3f}, entropy={report['winner_latest_entropy']:.3f})."
+        )
         lines.append("")
         lines.append("### State profiles")
         lines.append("")
         for p in report.get("winner_state_profiles") or []:
-            lines.append(f"- State {p['state']}: {p['label']} | return={p['log_return']:.5f}, RV={p['realized_volatility']:.5f}, dlogV={p['log_volume_change']:.5f}")
+            lines.append(
+                f"- State {p['state']}: {p['label']} | return={p['log_return']:.5f}, "
+                f"RV={p['realized_volatility']:.5f}, dlogV={p['log_volume_change']:.5f}"
+            )
     else:
         lines.append("No candidate passed the descriptive production gate.")
-    lines += ["", "Promotion is intentionally disabled. Forecast ablation must prove OOS value before HMM can be used predictively."]
+    lines += [
+        "",
+        "Promotion is intentionally disabled. Forecast ablation must prove OOS value before HMM can be used predictively.",
+    ]
     return "\n".join(lines) + "\n"
 
 
