@@ -19,11 +19,12 @@ jobs:
     env:
       TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DUNE_API_KEY: ${{ secrets.DUNE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
       CRYPTOPANIC_API_KEY: ${{ secrets.CRYPTOPANIC_API_KEY }}
       ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ETH_VALUATION_API_URL: ${{ secrets.ETH_VALUATION_API_URL }}
       ETH_VALUATION_API_TOKEN: ${{ secrets.ETH_VALUATION_API_TOKEN }}
       ETH_FLOW_API_URL: ${{ secrets.ETH_FLOW_API_URL }}
@@ -44,20 +45,22 @@ jobs:
           pip install -r requirements.txt
       - name: Run test gate
         run: python -m unittest discover -s tests -p "test_*.py" -v
-      - name: Validate Telegram secrets
+      - name: Validate required secrets
         shell: bash
         run: |
           if [[ -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]]; then
             echo "ERROR: TG_BOT_TOKEN and TG_CHAT_ID are required."
             exit 1
           fi
-      - name: Report persistence mode
-        shell: bash
-        run: |
           if [[ -z "$DATABASE_URL" ]]; then
-            echo "WARNING: DATABASE_URL not configured. PIT persistence will be ARTIFACT_ONLY and unsuitable as long-term calibration source of truth."
+            echo "WARNING: DATABASE_URL not configured. PIT persistence will be ARTIFACT_ONLY."
           else
             echo "OK: external PostgreSQL persistence configured."
+          fi
+          if [[ -z "$DUNE_API_KEY" ]]; then
+            echo "WARNING: DUNE_API_KEY not configured. ETH-native Capital Flow/Structural state will depend on explicit ETH_* adapters or remain unavailable."
+          else
+            echo "OK: native Dune collector configured."
           fi
       - name: Restore non-authoritative convenience cache
         uses: actions/cache@v4
