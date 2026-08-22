@@ -8,6 +8,8 @@ from eth_trend_v3.hmm_bootstrap import (
     build_bootstrap_features,
     fit_robust_scaler,
     hmm_parameter_count,
+    label_state_profile,
+    normalized_entropy,
     seed_stability,
 )
 
@@ -39,6 +41,24 @@ class HMMBootstrapTests(unittest.TestCase):
         a = np.array([0, 0, 1, 1, 2, 2])
         b = np.array([2, 2, 0, 0, 1, 1])
         self.assertAlmostEqual(seed_stability([a, b]), 1.0)
+
+    def test_normalized_entropy_distinguishes_certainty(self):
+        self.assertAlmostEqual(normalized_entropy([1.0, 0.0, 0.0]), 0.0)
+        self.assertAlmostEqual(normalized_entropy([1/3, 1/3, 1/3]), 1.0, places=6)
+
+    def test_state_profile_label_uses_return_and_relative_vol(self):
+        self.assertEqual(
+            label_state_profile({"log_return": 0.004, "realized_volatility": 0.03}, 0.02),
+            "High-Vol Bull",
+        )
+        self.assertEqual(
+            label_state_profile({"log_return": -0.004, "realized_volatility": 0.01}, 0.02),
+            "Low-Vol Bear",
+        )
+        self.assertEqual(
+            label_state_profile({"log_return": 0.0002, "realized_volatility": 0.01}, 0.02),
+            "Low-Vol Sideways",
+        )
 
 
 if __name__ == "__main__":
