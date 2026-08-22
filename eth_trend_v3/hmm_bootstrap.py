@@ -98,7 +98,6 @@ def bic(log_likelihood: float, n_samples: int, n_states: int, n_features: int) -
 
 
 def state_diagnostics(model: GaussianHMM, states: np.ndarray) -> dict:
-    n = len(states)
     occupancy = [float(np.mean(states == i)) for i in range(model.n_components)]
     durations = []
     for i in range(model.n_components):
@@ -141,6 +140,39 @@ def seed_stability(state_sequences: list[np.ndarray]) -> float:
         for j in range(i + 1, len(state_sequences)):
             vals.append(adjusted_rand_score(state_sequences[i], state_sequences[j]))
     return float(np.median(vals)) if vals else 0.0
+
+
+def normalized_entropy(probabilities: Iterable[float]) -> float:
+    p = np.asarray(list(probabilities), dtype=float)
+    p = p[np.isfinite(p) & (p > 0)]
+    if len(p) <= 1:
+        return 0.0
+    p = p / p.sum()
+    return float(-np.sum(p * np.log(p)) / math.log(len(p)))
+
+
+def label_state_profile(profile: dict[str, float], vol_median: float) -> str:
+    r = float(profile.get("log_return", 0.0))
+    vol = float(profile.get("realized_volatility", 0.0))
+    vol_prefix = "High-Vol" if vol > vol_median else "Low-Vol"
+    if r > 0.001:
+        direction = "Bull"
+    elif r < -0.001:
+        direction = "Bear"
+    else:
+        direction = "Sideways"
+    return f"{vol_prefix} {direction}"
+
+
+def model_parameters(model: GaussianHMM) -> dict:
+    return {
+        "n_states": int(model.n_components),
+        "covariance_type": model.covariance_type,
+        "startprob": model.startprob_.tolist(),
+        "transmat": model.transmat_.tolist(),
+        "means": model.means_.tolist(),
+        "covars": model.covars_.tolist(),
+    }
 
 
 def walk_forward_validation(x_raw: np.ndarray, n_states: int, seed: int, min_train: int = 500, test_size: int = 100) -> list[dict]:
@@ -223,18 +255,40 @@ def train_candidates(features: pd.DataFrame) -> dict:
     if winner_model is not None:
         states = winner_model.predict(x_scaled)
         profiles = []
+        raw_profiles = []
         for i in range(winner_model.n_components):
             mask = states == i
             raw_mean = np.mean(x_raw[mask], axis=0) if np.any(mask) else np.full(x_raw.shape[1], np.nan)
-            profiles.append({FEATURES[j]: float(raw_mean[j]) for j in range(len(FEATURES))})
+            raw_profiles.append({FEATURES[j]: float(raw_mean[j]) for j in range(len(FEATURES))})
+        vol_median = float(np.nanmedian([p["realized_volatility"] for p in raw_profiles]))
+        for i, profile in enumerate(raw_profiles):
+            profiles.append({"state": i, "label": label_state_profile(profile, vol_median), **profile})
         state_profiles = profiles
         posterior = winner_model.predict_proba(x_scaled)[-1].tolist()
         transition = winner_model.transmat_.tolist()
+    latest_entropy = normalized_entropy(posterior or []) if posterior else None
+    latest_max_posterior = max(posterior) if posterior else None
+    latest_state = int(np.argmax(posterior)) if posterior else None
+    latest_label = None
+    if latest_state is not None and state_profiles:
+        latest_label = state_profiles[latest_state]["label"]
+        if latest_max_posterior is not None and latest_max_posterior < 0.55:
+            latest_label = "Transition"
+    observation_count = len(x_raw)
+    if observation_count < 500:
+        maturity = "UNAVAILABLE"
+    elif observation_count < 1000:
+        maturity = "EXPERIMENTAL"
+    else:
+        maturity = "CANDIDATE"
+    descriptive_ready = bool(winner is not None and observation_count >= 1000)
     return {
-        "schema_version": "hmm-bootstrap-v1",
+        "schema_version": "hmm-bootstrap-v2",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "feature_schema": FEATURES,
-        "observation_count": len(x_raw),
+        "observation_count": observation_count,
+        "maturity": maturity,
+        "descriptive_production_ready": descriptive_ready,
         "history_start": features["timestamp"].iloc[0].isoformat(),
         "history_end": features["timestamp"].iloc[-1].isoformat(),
         "normalization": {"type": "robust_z", "clip": [-5, 5], "median": scaler.median, "scale": scaler.scale},
@@ -245,6 +299,11 @@ def train_candidates(features: pd.DataFrame) -> dict:
         "winner_transition_matrix": transition,
         "winner_state_profiles": state_profiles,
         "winner_latest_posterior": posterior,
+        "winner_latest_max_posterior": latest_max_posterior,
+        "winner_latest_entropy": latest_entropy,
+        "winner_latest_state": latest_state,
+        "winner_latest_label": latest_label,
+        "winner_model_parameters": model_parameters(winner_model) if winner_model is not None else None,
         "promotion_allowed": False,
         "promotion_note": "Bootstrap is descriptive candidate validation only. Production promotion requires explicit review and forecast ablation.",
     }
@@ -258,6 +317,8 @@ def render_markdown(report: dict) -> str:
         f"Observations: {report['observation_count']}",
         f"History: {report['history_start']} → {report['history_end']}",
         f"Features: {', '.join(report['feature_schema'])}",
+        f"Maturity: {report['maturity']}",
+        f"Descriptive production ready: {report['descriptive_production_ready']}",
         "",
         "| States | BIC | Seed stability (ARI) | Occupancy | Duration | Walk-forward | Gate |",
         "|---:|---:|---:|---|---|---|---|",
@@ -271,6 +332,12 @@ def render_markdown(report: dict) -> str:
     lines += ["", "## Winner", ""]
     if report["winner"]:
         lines.append(f"Candidate: {report['winner']['n_states']}-state HMM (descriptive gate passed).")
+        lines.append(f"Latest regime: {report['winner_latest_label']} (max posterior={report['winner_latest_max_posterior']:.3f}, entropy={report['winner_latest_entropy']:.3f}).")
+        lines.append("")
+        lines.append("### State profiles")
+        lines.append("")
+        for p in report.get("winner_state_profiles") or []:
+            lines.append(f"- State {p['state']}: {p['label']} | return={p['log_return']:.5f}, RV={p['realized_volatility']:.5f}, dlogV={p['log_volume_change']:.5f}")
     else:
         lines.append("No candidate passed the descriptive production gate.")
     lines += ["", "Promotion is intentionally disabled. Forecast ablation must prove OOS value before HMM can be used predictively."]
