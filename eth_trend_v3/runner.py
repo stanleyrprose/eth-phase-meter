@@ -54,11 +54,7 @@ def _forecast_bundle(records, market_state, health, regime):
         rows = build_labeled_rows(records, hours, timeframe="4h")
         prob, wf, reason = fit_live_probability(rows, current)
         metrics = wf.get("metrics") or {}
-        rel = reliability_from_metrics(
-            metrics,
-            float(health.get("coverage", 0)),
-            int(wf.get("sample_size", 0)),
-        )
+        rel = reliability_from_metrics(metrics, float(health.get("coverage", 0)), int(wf.get("sample_size", 0)))
         if health.get("status") == "DATA_INSUFFICIENT":
             prob = None
             reason = "DATA_INSUFFICIENT"
@@ -77,13 +73,7 @@ def _forecast_bundle(records, market_state, health, regime):
             "selected_model": wf.get("selected_model"),
             "reason": reason,
         }
-    overall = (
-        "High"
-        if reliabilities and all(x == "High" for x in reliabilities)
-        else "Medium"
-        if reliabilities and any(x in ("High", "Medium") for x in reliabilities)
-        else "Low"
-    )
+    overall = "High" if reliabilities and all(x == "High" for x in reliabilities) else "Medium" if reliabilities and any(x in ("High", "Medium") for x in reliabilities) else "Low"
     return out, overall
 
 
@@ -116,10 +106,8 @@ def run_one(timeframe, history_records):
     raw = collect(timeframe)
     factors = all_factors(raw)
     result = evaluate(timeframe, raw, factors, ts)
-
     OUTPUT.mkdir(parents=True, exist_ok=True)
     update_history(OUTPUT / "v3_history.csv", result)
-
     clusters = cluster_factors(factors)
     factor_metadata = enrich_factor_metadata(factors)
     market_state = build_market_state(raw, result)
@@ -130,23 +118,13 @@ def run_one(timeframe, history_records):
     else:
         hmm = {"available": False, "reason": "PRIMARY_REGIME_USES_4H"}
     regime = hmm if hmm.get("available") else deterministic(result)
-    if not hmm.get("available"):
+    if not hmm.get("available") and timeframe == "4h":
         regime["fallback_reason"] = hmm.get("reason")
 
     if timeframe == "4h":
-        forecasts, model_reliability = _forecast_bundle(
-            history_records, market_state, health, regime
-        )
+        forecasts, model_reliability = _forecast_bundle(history_records, market_state, health, regime)
     else:
-        forecasts = {
-            h: {
-                "probability_up": None,
-                "status": "UNAVAILABLE",
-                "reliability": "Low",
-                "reason": "PRIMARY_FORECAST_USES_4H",
-            }
-            for h in HORIZONS
-        }
+        forecasts = {h: {"probability_up": None, "status": "UNAVAILABLE", "reliability": "Low", "reason": "PRIMARY_FORECAST_USES_4H"} for h in HORIZONS}
         model_reliability = "Low"
 
     current_row = _current_features(market_state, regime)
@@ -157,9 +135,7 @@ def run_one(timeframe, history_records):
     forecasts = _fail_closed_unreliable_forecasts(forecasts, model_health)
     if model_health.get("status") == "MODEL_UNRELIABLE":
         model_reliability = "Low"
-
     anomalies = detect_anomalies(raw, _anomaly_history(history_records))
-
     payload = {
         "timestamp": ts,
         "timeframe": timeframe,
@@ -179,40 +155,16 @@ def run_one(timeframe, history_records):
         "model_health": model_health,
         "anomalies": anomalies,
     }
-
     previous = load_latest_record(f"monitor_state_{timeframe}") or {}
     payload["alerts"] = build_alerts(payload, previous, anomalies=anomalies)
     if model_health.get("status") != "NORMAL":
-        payload["alerts"].append({
-            "level": 3,
-            "type": model_health.get("status"),
-            "message": json.dumps(model_health, ensure_ascii=False, default=str),
-        })
-
-    record = build_pit_record(
-        timeframe,
-        raw,
-        result,
-        market_state=market_state,
-        clusters=clusters,
-        feature_metadata=factor_metadata,
-        data_health=health,
-        regime=regime,
-        forecasts=forecasts,
-        drift={"feature_drift": feature_drift, "model_health": model_health},
-        anomalies=anomalies,
-        alerts=payload["alerts"],
-    )
+        payload["alerts"].append({"level": 3, "type": model_health.get("status"), "message": json.dumps(model_health, ensure_ascii=False, default=str)})
+    record = build_pit_record(timeframe, raw, result, market_state=market_state, clusters=clusters, feature_metadata=factor_metadata, data_health=health, regime=regime, forecasts=forecasts, drift={"feature_drift": feature_drift, "model_health": model_health}, anomalies=anomalies, alerts=payload["alerts"])
     persisted = persist_json_record("pit_snapshot", record)
     record["quality_flags"]["external_persisted"] = persisted
     write_pit_snapshot(OUTPUT, timeframe, record)
-
     persist_json_record(f"monitor_state_{timeframe}", payload)
-    (OUTPUT / f"v3_snapshot_{timeframe}.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
-
+    (OUTPUT / f"v3_snapshot_{timeframe}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     print(telegram_text(result))
     print(f"PIT persistence: {persistence_mode()} | external_persisted={persisted}")
     if core.TG_BOT_TOKEN and core.TG_CHAT_ID and timeframe == "4h":
@@ -242,34 +194,13 @@ def main():
     r1, p1 = run_one("1h", history)
     results = {"4h": r4, "1h": r1}
     apply_execution_gate(results)
-
     summary = {"4h": p4, "1h": p1}
-    (OUTPUT / "latest_monitor.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    (OUTPUT / "latest_monitor.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     write_dashboard(OUTPUT, p4)
-
-    manifest_path = write_run_manifest(
-        OUTPUT,
-        results,
-        extra={
-            "data_health": {
-                "4h": p4["data_health"]["status"],
-                "1h": p1["data_health"]["status"],
-            },
-            "forecast_status": {h: v["status"] for h, v in p4["forecasts"].items()},
-            "model_reliability": p4["model_reliability"],
-            "model_health": p4["model_health"]["status"],
-        },
-    )
+    manifest_path = write_run_manifest(OUTPUT, results, extra={"data_health": {"4h": p4["data_health"]["status"], "1h": p1["data_health"]["status"]}, "forecast_status": {h: v["status"] for h, v in p4["forecasts"].items()}, "model_reliability": p4["model_reliability"], "model_health": p4["model_health"]["status"]})
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["external_persisted"] = persist_json_record("run_manifest", manifest)
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     gate = f"🚦 Execution Gate: <b>{r1.execution_gate}</b> | {r1.execution_reason}"
     print(gate)
     if core.TG_BOT_TOKEN and core.TG_CHAT_ID:

@@ -1,22 +1,19 @@
 from eth_trend_v3.hmm_bootstrap import run
-from eth_trend_v3.hmm_production import build_production_model_record, persist_production_model
+from eth_trend_v3.hmm_production import persist_production_model, build_production_model_record
 
 
 if __name__ == "__main__":
     report = run(days=365)
     preferred = report.get("preferred_descriptive_variant")
-    variant = (report.get("variants") or {}).get(preferred) if preferred else None
-    winner = (variant or {}).get("winner")
-    production = build_production_model_record(report)
-    if winner:
+    record = build_production_model_record(report)
+    persisted = persist_production_model(report) if record else False
+    if preferred:
+        variant = (report.get("variants") or {}).get(preferred) or {}
+        winner = variant.get("winner") or {}
         print(
-            f"HMM_BOOTSTRAP_OK variant={preferred} winner={winner['n_states']}-state "
-            f"observations={report['observation_count']}"
+            f"HMM_BOOTSTRAP_OK preferred={preferred} "
+            f"winner={winner.get('n_states')}-state observations={report['observation_count']} "
+            f"production_record={'yes' if record else 'no'} persisted={persisted}"
         )
     else:
         print(f"HMM_BOOTSTRAP_NO_WINNER observations={report['observation_count']}")
-    if production is None:
-        print("HMM_PRODUCTION_NOT_ELIGIBLE")
-    else:
-        persisted = persist_production_model(report)
-        print(f"HMM_PRODUCTION_PERSISTED={persisted}")

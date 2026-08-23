@@ -15,10 +15,12 @@ def prd_summary(payload: dict) -> str:
     engine=regime.get('engine')
     if engine:
         lines.append(f"Engine: {engine}")
-    if regime.get('probabilities'):
+    if isinstance(regime.get('max_posterior'),(int,float)):
+        lines.append(f"HMM posterior: {regime['max_posterior']:.1%}")
+    elif regime.get('probabilities'):
         top=max(regime['probabilities'].items(),key=lambda kv:kv[1]); lines.append(f"Regime probability: {top[1]:.0%}")
     if isinstance(regime.get('entropy'),(int,float)):
-        lines.append(f"Regime entropy: {regime['entropy']:.2f}")
+        lines.append(f"Regime entropy: {regime['entropy']:.3f}")
     if regime.get('fallback_reason'):
         lines.append(f"Fallback reason: {regime['fallback_reason']}")
     lines+=['','📈 <b>Forecast</b>']

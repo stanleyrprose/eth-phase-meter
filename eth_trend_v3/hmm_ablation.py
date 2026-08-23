@@ -45,7 +45,7 @@ def _metrics(y, p):
     p = np.clip(np.asarray(p, dtype=float), 1e-6, 1 - 1e-6)
     y = np.asarray(y, dtype=int)
     brier = float(np.mean((p - y) ** 2))
-    logloss = float(-np.mean(y*np.log(p) + (1-y)*np.log(1-p)))
+    logloss = float(-np.mean(y * np.log(p) + (1-y) * np.log(1-p)))
     bins = _calibration_bins(y, p)
     n = sum(b["n"] for b in bins)
     cal = float(sum(b["n"] * abs(b["predicted"] - b["actual"]) for b in bins) / n) if n else None
@@ -121,11 +121,7 @@ def run_ablation(features: pd.DataFrame, min_train: int = 1000, test_size: int =
         mb = _metrics(y, vals["baseline"])
         mh = _metrics(y, vals["plus_hmm"])
         delta = float(mb["brier"] - mh["brier"])
-        cal_ok = (
-            mh["calibration_error"] is not None
-            and mb["calibration_error"] is not None
-            and mh["calibration_error"] <= mb["calibration_error"] + 0.02
-        )
+        cal_ok = mh["calibration_error"] is not None and mb["calibration_error"] is not None and mh["calibration_error"] <= mb["calibration_error"] + 0.02
         passes = bool(mh["oos_n"] >= 120 and delta > 0 and cal_ok)
         out["horizons"][horizon] = {
             "available": True,
