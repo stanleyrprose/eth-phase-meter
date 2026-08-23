@@ -18,7 +18,8 @@ from .data_health import assess as assess_data_health
 from .dataset import HORIZONS, REGIME_CODE, load_pit_records, build_labeled_rows, feature_row
 from .forecast import fit_live_probability
 from .calibration import reliability_from_metrics, probability_state
-from .regime import deterministic, fit_hmm, build_observations_from_pit
+from .regime import deterministic
+from .hmm_production import infer_live_regime
 from .drift import detect_feature_drift, assess_model_health
 from .anomaly import detect as detect_anomalies
 from .alerts import build_alerts
@@ -53,11 +54,7 @@ def _forecast_bundle(records, market_state, health, regime):
         rows = build_labeled_rows(records, hours, timeframe="4h")
         prob, wf, reason = fit_live_probability(rows, current)
         metrics = wf.get("metrics") or {}
-        rel = reliability_from_metrics(
-            metrics,
-            float(health.get("coverage", 0)),
-            int(wf.get("sample_size", 0)),
-        )
+        rel = reliability_from_metrics(metrics, float(health.get("coverage", 0)), int(wf.get("sample_size", 0)))
         if health.get("status") == "DATA_INSUFFICIENT":
             prob = None
             reason = "DATA_INSUFFICIENT"
@@ -77,10 +74,8 @@ def _forecast_bundle(records, market_state, health, regime):
             "reason": reason,
         }
     overall = (
-        "High"
-        if reliabilities and all(x == "High" for x in reliabilities)
-        else "Medium"
-        if reliabilities and any(x in ("High", "Medium") for x in reliabilities)
+        "High" if reliabilities and all(x == "High" for x in reliabilities)
+        else "Medium" if reliabilities and any(x in ("High", "Medium") for x in reliabilities)
         else "Low"
     )
     return out, overall
@@ -125,28 +120,18 @@ def run_one(timeframe, history_records):
     health = assess_data_health(raw, result.coverage)
 
     if timeframe == "4h":
-        observations, current_observation = build_observations_from_pit(history_records, raw)
-        hmm = (
-            fit_hmm(observations, current_observation)
-            if current_observation is not None
-            else {"available": False, "reason": "NO_VALID_HMM_HISTORY"}
-        )
+        hmm = infer_live_regime(raw)
     else:
         hmm = {"available": False, "reason": "PRIMARY_REGIME_USES_4H"}
     regime = hmm if hmm.get("available") else deterministic(result)
+    if not hmm.get("available") and timeframe == "4h":
+        regime["fallback_reason"] = hmm.get("reason")
 
     if timeframe == "4h":
-        forecasts, model_reliability = _forecast_bundle(
-            history_records, market_state, health, regime
-        )
+        forecasts, model_reliability = _forecast_bundle(history_records, market_state, health, regime)
     else:
         forecasts = {
-            h: {
-                "probability_up": None,
-                "status": "UNAVAILABLE",
-                "reliability": "Low",
-                "reason": "PRIMARY_FORECAST_USES_4H",
-            }
+            h: {"probability_up": None, "status": "UNAVAILABLE", "reliability": "Low", "reason": "PRIMARY_FORECAST_USES_4H"}
             for h in HORIZONS
         }
         model_reliability = "Low"
@@ -185,35 +170,19 @@ def run_one(timeframe, history_records):
     previous = load_latest_record(f"monitor_state_{timeframe}") or {}
     payload["alerts"] = build_alerts(payload, previous, anomalies=anomalies)
     if model_health.get("status") != "NORMAL":
-        payload["alerts"].append({
-            "level": 3,
-            "type": model_health.get("status"),
-            "message": json.dumps(model_health, ensure_ascii=False, default=str),
-        })
+        payload["alerts"].append({"level": 3, "type": model_health.get("status"), "message": json.dumps(model_health, ensure_ascii=False, default=str)})
 
     record = build_pit_record(
-        timeframe,
-        raw,
-        result,
-        market_state=market_state,
-        clusters=clusters,
-        feature_metadata=factor_metadata,
-        data_health=health,
-        regime=regime,
-        forecasts=forecasts,
-        drift={"feature_drift": feature_drift, "model_health": model_health},
-        anomalies=anomalies,
-        alerts=payload["alerts"],
+        timeframe, raw, result, market_state=market_state, clusters=clusters, feature_metadata=factor_metadata,
+        data_health=health, regime=regime, forecasts=forecasts,
+        drift={"feature_drift": feature_drift, "model_health": model_health}, anomalies=anomalies, alerts=payload["alerts"],
     )
     persisted = persist_json_record("pit_snapshot", record)
     record["quality_flags"]["external_persisted"] = persisted
     write_pit_snapshot(OUTPUT, timeframe, record)
 
     persist_json_record(f"monitor_state_{timeframe}", payload)
-    (OUTPUT / f"v3_snapshot_{timeframe}.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    (OUTPUT / f"v3_snapshot_{timeframe}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
     print(telegram_text(result))
     print(f"PIT persistence: {persistence_mode()} | external_persisted={persisted}")
@@ -246,31 +215,22 @@ def main():
     apply_execution_gate(results)
 
     summary = {"4h": p4, "1h": p1}
-    (OUTPUT / "latest_monitor.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    (OUTPUT / "latest_monitor.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     write_dashboard(OUTPUT, p4)
 
     manifest_path = write_run_manifest(
-        OUTPUT,
-        results,
+        OUTPUT, results,
         extra={
-            "data_health": {
-                "4h": p4["data_health"]["status"],
-                "1h": p1["data_health"]["status"],
-            },
+            "data_health": {"4h": p4["data_health"]["status"], "1h": p1["data_health"]["status"]},
             "forecast_status": {h: v["status"] for h, v in p4["forecasts"].items()},
             "model_reliability": p4["model_reliability"],
             "model_health": p4["model_health"]["status"],
+            "regime_engine": p4["regime"].get("engine"),
         },
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["external_persisted"] = persist_json_record("run_manifest", manifest)
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     gate = f"🚦 Execution Gate: <b>{r1.execution_gate}</b> | {r1.execution_reason}"
     print(gate)

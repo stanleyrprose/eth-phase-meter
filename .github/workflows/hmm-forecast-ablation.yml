@@ -1,19 +1,17 @@
-name: HMM Historical Bootstrap
+name: HMM Forecast Ablation
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '35 3 * * 0'
+    - cron: '20 4 * * 0'
 
 permissions:
   contents: read
 
 jobs:
-  bootstrap:
+  ablation:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -23,12 +21,12 @@ jobs:
         run: pip install -r requirements.txt
       - name: Test
         run: python -m unittest discover -s tests -v
-      - name: Historical HMM bootstrap
-        run: python -m scripts.run_hmm_bootstrap
-      - name: Upload HMM report
+      - name: HMM forecast ablation
+        run: python -m scripts.run_hmm_ablation
+      - name: Upload HMM ablation report
         uses: actions/upload-artifact@v4
         with:
-          name: hmm-bootstrap-report
-          path: eth_reports/hmm_bootstrap
+          name: hmm-forecast-ablation-report
+          path: eth_reports/hmm_ablation
           if-no-files-found: error
           retention-days: 30

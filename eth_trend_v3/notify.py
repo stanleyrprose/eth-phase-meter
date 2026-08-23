@@ -12,8 +12,14 @@ def telegram_text(r):
 def prd_summary(payload: dict) -> str:
     state=(payload.get('market_state') or {}).get('dimensions') or {}; forecasts=payload.get('forecasts') or {}; health=payload.get('data_health') or {}; regime=payload.get('regime') or {}
     lines=['📊 <b>ETH Market State [4H]</b>',f"💰 Price: <b>${payload.get('price',0):,.2f}</b>",'━━━━━━━━━━━━━━━━━━━━',f"🧭 Regime: <b>{regime.get('regime','Unavailable')}</b>"]
+    if regime.get('engine'):
+        lines.append(f"Engine: {regime.get('engine')}")
     if regime.get('probabilities'):
         top=max(regime['probabilities'].items(),key=lambda kv:kv[1]); lines.append(f"Regime probability: {top[1]:.0%}")
+    if isinstance(regime.get('entropy'),(int,float)):
+        lines.append(f"Regime entropy: {regime.get('entropy'):.2f}")
+    if regime.get('fallback_reason'):
+        lines.append(f"Fallback: {regime.get('fallback_reason')}")
     lines+=['','📈 <b>Forecast</b>']
     for h in ('3d','7d','30d'):
         f=forecasts.get(h) or {}; p=f.get('probability_up')
