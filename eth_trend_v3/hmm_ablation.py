@@ -191,7 +191,7 @@ def run_ablation(features: pd.DataFrame, min_train: int = 1000, test_size: int =
         train_end += test_size
     out = {
         "schema_version": "hmm-forecast-ablation-v3",
-        "method": "Expanding OOS; historical base-rate comparator; HMM refit per outer fold; causal filtered posterior only; paired Brier bootstrap CI; no automatic promotion.",
+        "method": "Expanding OOS; HMM refit per outer fold; causal filtered posterior only; no automatic promotion.",
         "baseline_features": BASE_FEATURES,
         "hmm_features": ["p_state_0", "p_state_1", "p_state_2", "p_state_3"],
         "folds": fold_summaries,
