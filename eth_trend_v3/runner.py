@@ -18,7 +18,8 @@ from .data_health import assess as assess_data_health
 from .dataset import HORIZONS, REGIME_CODE, load_pit_records, build_labeled_rows, feature_row
 from .forecast import fit_live_probability
 from .calibration import reliability_from_metrics, probability_state
-from .regime import deterministic, fit_hmm, build_observations_from_pit
+from .regime import deterministic
+from .hmm_production import infer_live_regime
 from .drift import detect_feature_drift, assess_model_health
 from .anomaly import detect as detect_anomalies
 from .alerts import build_alerts
@@ -125,15 +126,12 @@ def run_one(timeframe, history_records):
     health = assess_data_health(raw, result.coverage)
 
     if timeframe == "4h":
-        observations, current_observation = build_observations_from_pit(history_records, raw)
-        hmm = (
-            fit_hmm(observations, current_observation)
-            if current_observation is not None
-            else {"available": False, "reason": "NO_VALID_HMM_HISTORY"}
-        )
+        hmm = infer_live_regime(raw)
     else:
         hmm = {"available": False, "reason": "PRIMARY_REGIME_USES_4H"}
     regime = hmm if hmm.get("available") else deterministic(result)
+    if not hmm.get("available"):
+        regime["fallback_reason"] = hmm.get("reason")
 
     if timeframe == "4h":
         forecasts, model_reliability = _forecast_bundle(
