@@ -13,6 +13,10 @@ HORIZONS = {"3d": 18, "7d": 42, "30d": 180}
 BASE_FEATURES = ["log_return_24h", "realized_volatility", "log_volume_change"]
 N_STATES = 4
 SEED = 7
+MIN_OOS_N = 300
+MIN_BRIER_IMPROVEMENT = 0.005
+MAX_LOGLOSS_DEGRADATION = 1e-6
+MAX_CALIBRATION_DEGRADATION = 0.01
 
 
 def _fit_hmm(train_raw: np.ndarray):
@@ -69,6 +73,42 @@ def _fit_calibrated_classifier(X_train, y_train, X_test):
     return iso.predict(raw)
 
 
+def evaluate_research_gate(mb: dict, mh: dict) -> dict:
+    delta = float(mb["brier"] - mh["brier"])
+    logloss_improvement = float(mb["log_loss"] - mh["log_loss"])
+    calibration_improvement = (
+        float(mb["calibration_error"] - mh["calibration_error"])
+        if mb.get("calibration_error") is not None and mh.get("calibration_error") is not None
+        else None
+    )
+    components = {
+        "oos_n_ok": bool(mh["oos_n"] >= MIN_OOS_N),
+        "brier_ok": bool(delta >= MIN_BRIER_IMPROVEMENT),
+        "log_loss_ok": bool(logloss_improvement >= -MAX_LOGLOSS_DEGRADATION),
+        "calibration_ok": bool(
+            calibration_improvement is not None
+            and calibration_improvement >= -MAX_CALIBRATION_DEGRADATION
+        ),
+    }
+    failed_reasons = []
+    if not components["oos_n_ok"]:
+        failed_reasons.append(f"OOS_N_LT_{MIN_OOS_N}")
+    if not components["brier_ok"]:
+        failed_reasons.append(f"BRIER_IMPROVEMENT_LT_{MIN_BRIER_IMPROVEMENT:.3f}")
+    if not components["log_loss_ok"]:
+        failed_reasons.append("LOG_LOSS_WORSE")
+    if not components["calibration_ok"]:
+        failed_reasons.append(f"CALIBRATION_DEGRADATION_GT_{MAX_CALIBRATION_DEGRADATION:.3f}")
+    return {
+        "brier_improvement": delta,
+        "log_loss_improvement": logloss_improvement,
+        "calibration_improvement": calibration_improvement,
+        "components": components,
+        "failed_reasons": failed_reasons,
+        "passes": bool(all(components.values())),
+    }
+
+
 def run_ablation(features: pd.DataFrame, min_train: int = 1000, test_size: int = 120) -> dict:
     df = features.copy().reset_index(drop=True)
     synthetic_log_price = np.cumsum(df["log_return"].to_numpy(dtype=float))
@@ -105,7 +145,7 @@ def run_ablation(features: pd.DataFrame, min_train: int = 1000, test_size: int =
         fold_summaries.append(fold_info)
         train_end += test_size
     out = {
-        "schema_version": "hmm-forecast-ablation-v1",
+        "schema_version": "hmm-forecast-ablation-v2",
         "method": "Expanding OOS; HMM refit per outer fold; causal filtered posterior only; no automatic promotion.",
         "baseline_features": BASE_FEATURES,
         "hmm_features": ["p_state_0", "p_state_1", "p_state_2", "p_state_3"],
@@ -120,15 +160,25 @@ def run_ablation(features: pd.DataFrame, min_train: int = 1000, test_size: int =
             continue
         mb = _metrics(y, vals["baseline"])
         mh = _metrics(y, vals["plus_hmm"])
-        delta = float(mb["brier"] - mh["brier"])
-        cal_ok = (mh["calibration_error"] is not None and mb["calibration_error"] is not None and mh["calibration_error"] <= mb["calibration_error"] + 0.02)
-        passes = bool(mh["oos_n"] >= 120 and delta > 0 and cal_ok)
+        gate = evaluate_research_gate(mb, mh)
         out["horizons"][horizon] = {
             "available": True,
             "baseline": mb,
             "plus_hmm": mh,
-            "brier_improvement": delta,
-            "passes_research_gate": passes,
+            "brier_improvement": gate["brier_improvement"],
+            "log_loss_improvement": gate["log_loss_improvement"],
+            "calibration_improvement": gate["calibration_improvement"],
+            "research_gate": {
+                "thresholds": {
+                    "min_oos_n": MIN_OOS_N,
+                    "min_brier_improvement": MIN_BRIER_IMPROVEMENT,
+                    "max_log_loss_degradation": MAX_LOGLOSS_DEGRADATION,
+                    "max_calibration_degradation": MAX_CALIBRATION_DEGRADATION,
+                },
+                "components": gate["components"],
+                "failed_reasons": gate["failed_reasons"],
+            },
+            "passes_research_gate": gate["passes"],
         }
     return out
 
@@ -137,18 +187,32 @@ def render_markdown(report: dict) -> str:
     lines = [
         "# HMM Forecast Ablation Report", "",
         report["method"], "",
-        "| Horizon | OOS n | Baseline Brier | +HMM Brier | Improvement | Baseline LogLoss | +HMM LogLoss | Baseline CalErr | +HMM CalErr | Gate |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        "| Horizon | OOS n | Baseline Brier | +HMM Brier | ΔBrier | Baseline LogLoss | +HMM LogLoss | ΔLogLoss | Baseline CalErr | +HMM CalErr | ΔCal | Gate |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for h, r in report["horizons"].items():
         if not r.get("available"):
-            lines.append(f"| {h} | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | FAIL |")
+            lines.append(f"| {h} | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | FAIL |")
             continue
         b, m = r["baseline"], r["plus_hmm"]
         lines.append(
             f"| {h} | {m['oos_n']} | {b['brier']:.4f} | {m['brier']:.4f} | {r['brier_improvement']:+.4f} | "
-            f"{b['log_loss']:.4f} | {m['log_loss']:.4f} | {b['calibration_error']:.4f} | {m['calibration_error']:.4f} | "
+            f"{b['log_loss']:.4f} | {m['log_loss']:.4f} | {r['log_loss_improvement']:+.4f} | "
+            f"{b['calibration_error']:.4f} | {m['calibration_error']:.4f} | {r['calibration_improvement']:+.4f} | "
             f"{'PASS' if r['passes_research_gate'] else 'FAIL'} |"
+        )
+    lines += ["", "## Research gate details", ""]
+    for h, r in report["horizons"].items():
+        if not r.get("available"):
+            continue
+        comps = r.get("research_gate", {}).get("components", {})
+        reasons = r.get("research_gate", {}).get("failed_reasons", [])
+        lines.append(
+            f"- **{h}**: OOS={'PASS' if comps.get('oos_n_ok') else 'FAIL'}, "
+            f"Brier={'PASS' if comps.get('brier_ok') else 'FAIL'}, "
+            f"LogLoss={'PASS' if comps.get('log_loss_ok') else 'FAIL'}, "
+            f"Calibration={'PASS' if comps.get('calibration_ok') else 'FAIL'}"
+            + (f"; reasons={','.join(reasons)}" if reasons else "")
         )
     lines += ["", "Predictive promotion remains disabled. Passing this report is necessary but not sufficient for full six-dimension forecast integration."]
     return "\n".join(lines)
