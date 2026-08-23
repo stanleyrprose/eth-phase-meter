@@ -14,19 +14,25 @@ BASE_FEATURES = ["log_return_24h", "realized_volatility", "log_volume_change"]
 N_STATES = 4
 SEED = 7
 MIN_OOS_N = 300
-MIN_BRIER_IMPROVEMENT = 0.005
+MIN_BASELINE_BRIER_IMPROVEMENT = 0.005
+MIN_HMM_BRIER_IMPROVEMENT = 0.005
 MIN_FOLD_WIN_RATE = 0.60
 MAX_LOGLOSS_DEGRADATION = 1e-6
 MAX_CALIBRATION_DEGRADATION = 0.01
-BOOTSTRAP_DRAWS = 1000
-BOOTSTRAP_ALPHA = 0.10
+BOOTSTRAP_SAMPLES = 1000
 
 
 def _fit_hmm(train_raw: np.ndarray):
     from hmmlearn.hmm import GaussianHMM
     scaler = fit_robust_scaler(train_raw)
     z = apply_robust_scaler(train_raw, scaler)
-    model = GaussianHMM(n_components=N_STATES, covariance_type="diag", n_iter=500, tol=1e-4, random_state=SEED).fit(z)
+    model = GaussianHMM(
+        n_components=N_STATES,
+        covariance_type="diag",
+        n_iter=500,
+        tol=1e-4,
+        random_state=SEED,
+    ).fit(z)
     params = {
         "n_states": N_STATES,
         "startprob": model.startprob_.tolist(),
@@ -44,7 +50,13 @@ def _calibration_bins(y, p, bins=5):
         mask = (p >= lo) & (p < (hi if hi < 1 else hi + 1e-9))
         n = int(mask.sum())
         if n:
-            out.append({"lo": float(lo), "hi": float(hi), "n": n, "predicted": float(p[mask].mean()), "actual": float(y[mask].mean())})
+            out.append({
+                "lo": float(lo),
+                "hi": float(hi),
+                "n": n,
+                "predicted": float(p[mask].mean()),
+                "actual": float(y[mask].mean()),
+            })
     return out
 
 
@@ -76,30 +88,26 @@ def _fit_calibrated_classifier(X_train, y_train, X_test):
     return iso.predict(raw)
 
 
-def _base_rate_predictions(y_train, n_test: int):
-    p = float(np.mean(y_train))
-    p = min(max(p, 1e-6), 1 - 1e-6)
-    return np.full(n_test, p, dtype=float)
-
-
-def _moving_block_brier_ci(y, pb, ph, block_size: int, draws: int = BOOTSTRAP_DRAWS, alpha: float = BOOTSTRAP_ALPHA, seed: int = 17):
+def _moving_block_bootstrap_ci(y, pb, ph, block_len: int, samples: int = BOOTSTRAP_SAMPLES, seed: int = 7):
+    """Paired CI for Brier improvement using moving blocks to respect overlapping labels."""
     y = np.asarray(y, dtype=float)
     pb = np.asarray(pb, dtype=float)
     ph = np.asarray(ph, dtype=float)
-    n = len(y)
-    if n < max(30, block_size * 2):
-        return {"low": None, "median": None, "high": None, "draws": 0, "block_size": int(block_size)}
-    d = (pb - y) ** 2 - (ph - y) ** 2
+    gains = (pb - y) ** 2 - (ph - y) ** 2
+    n = len(gains)
+    if n == 0:
+        return {"low": None, "median": None, "high": None, "block_len": int(block_len), "samples": 0}
+    block_len = int(max(1, min(block_len, n)))
+    starts = np.arange(0, n - block_len + 1)
     rng = np.random.default_rng(seed)
-    vals = []
-    max_start = max(1, n - block_size + 1)
-    blocks_needed = int(np.ceil(n / block_size))
-    for _ in range(draws):
-        starts = rng.integers(0, max_start, size=blocks_needed)
-        idx = np.concatenate([np.arange(s, min(s + block_size, n)) for s in starts])[:n]
-        vals.append(float(np.mean(d[idx])))
-    qs = np.quantile(vals, [alpha / 2, 0.5, 1 - alpha / 2])
-    return {"low": float(qs[0]), "median": float(qs[1]), "high": float(qs[2]), "draws": int(draws), "block_size": int(block_size), "confidence": float(1-alpha)}
+    draws = []
+    n_blocks = int(np.ceil(n / block_len))
+    for _ in range(samples):
+        picked = rng.choice(starts, size=n_blocks, replace=True)
+        idx = np.concatenate([np.arange(s, s + block_len) for s in picked])[:n]
+        draws.append(float(np.mean(gains[idx])))
+    q = np.quantile(draws, [0.025, 0.5, 0.975])
+    return {"low": float(q[0]), "median": float(q[1]), "high": float(q[2]), "block_len": block_len, "samples": samples}
 
 
 def evaluate_research_gate(mb: dict, mh: dict, mbase: dict | None = None, hmm_ci: dict | None = None, fold_win_rate: float | None = None) -> dict:
@@ -110,26 +118,41 @@ def evaluate_research_gate(mb: dict, mh: dict, mbase: dict | None = None, hmm_ci
         if mb.get("calibration_error") is not None and mh.get("calibration_error") is not None
         else None
     )
-    baseline_beats_base_rate = bool(mbase is not None and mb["brier"] < mbase["brier"])
-    ci_low = None if not hmm_ci else hmm_ci.get("low")
+    baseline_vs_base_rate = (
+        float(mbase["brier"] - mb["brier"])
+        if mbase is not None and mbase.get("brier") is not None
+        else None
+    )
     components = {
         "oos_n_ok": bool(mh["oos_n"] >= MIN_OOS_N),
-        "baseline_beats_base_rate": baseline_beats_base_rate,
-        "brier_ok": bool(delta >= MIN_BRIER_IMPROVEMENT),
-        "brier_ci_ok": bool(ci_low is not None and ci_low > 0.0),
+        "baseline_beats_base_rate": bool(
+            baseline_vs_base_rate is not None and baseline_vs_base_rate >= MIN_BASELINE_BRIER_IMPROVEMENT
+        ),
+        "brier_ok": bool(delta >= MIN_HMM_BRIER_IMPROVEMENT),
+        "brier_ci_ok": bool(hmm_ci is not None and hmm_ci.get("low") is not None and hmm_ci["low"] > 0.0),
         "fold_win_rate_ok": bool(fold_win_rate is not None and fold_win_rate >= MIN_FOLD_WIN_RATE),
         "log_loss_ok": bool(logloss_improvement >= -MAX_LOGLOSS_DEGRADATION),
-        "calibration_ok": bool(calibration_improvement is not None and calibration_improvement >= -MAX_CALIBRATION_DEGRADATION),
+        "calibration_ok": bool(
+            calibration_improvement is not None and calibration_improvement >= -MAX_CALIBRATION_DEGRADATION
+        ),
     }
     failed_reasons = []
-    if not components["oos_n_ok"]: failed_reasons.append(f"OOS_N_LT_{MIN_OOS_N}")
-    if not components["baseline_beats_base_rate"]: failed_reasons.append("BASELINE_DOES_NOT_BEAT_BASE_RATE")
-    if not components["brier_ok"]: failed_reasons.append(f"BRIER_IMPROVEMENT_LT_{MIN_BRIER_IMPROVEMENT:.3f}")
-    if not components["brier_ci_ok"]: failed_reasons.append("BRIER_CI_CROSSES_ZERO")
-    if not components["fold_win_rate_ok"]: failed_reasons.append(f"FOLD_WIN_RATE_LT_{MIN_FOLD_WIN_RATE:.2f}")
-    if not components["log_loss_ok"]: failed_reasons.append("LOG_LOSS_WORSE")
-    if not components["calibration_ok"]: failed_reasons.append(f"CALIBRATION_DEGRADATION_GT_{MAX_CALIBRATION_DEGRADATION:.3f}")
+    if not components["oos_n_ok"]:
+        failed_reasons.append(f"OOS_N_LT_{MIN_OOS_N}")
+    if not components["baseline_beats_base_rate"]:
+        failed_reasons.append(f"BASELINE_BRIER_IMPROVEMENT_VS_BASE_RATE_LT_{MIN_BASELINE_BRIER_IMPROVEMENT:.3f}")
+    if not components["brier_ok"]:
+        failed_reasons.append(f"BRIER_IMPROVEMENT_LT_{MIN_HMM_BRIER_IMPROVEMENT:.3f}")
+    if not components["brier_ci_ok"]:
+        failed_reasons.append("BRIER_CI_CROSSES_ZERO")
+    if not components["fold_win_rate_ok"]:
+        failed_reasons.append(f"FOLD_WIN_RATE_LT_{MIN_FOLD_WIN_RATE:.2f}")
+    if not components["log_loss_ok"]:
+        failed_reasons.append("LOG_LOSS_WORSE")
+    if not components["calibration_ok"]:
+        failed_reasons.append(f"CALIBRATION_DEGRADATION_GT_{MAX_CALIBRATION_DEGRADATION:.3f}")
     return {
+        "baseline_brier_improvement_vs_base_rate": baseline_vs_base_rate,
         "brier_improvement": delta,
         "log_loss_improvement": logloss_improvement,
         "calibration_improvement": calibration_improvement,
@@ -142,7 +165,7 @@ def evaluate_research_gate(mb: dict, mh: dict, mbase: dict | None = None, hmm_ci
 def run_ablation(features: pd.DataFrame, min_train: int = 1000, test_size: int = 120) -> dict:
     df = features.copy().reset_index(drop=True)
     synthetic_log_price = np.cumsum(df["log_return"].to_numpy(dtype=float))
-    results = {h: {"base_rate": [], "baseline": [], "plus_hmm": [], "actual": [], "fold_deltas": []} for h in HORIZONS}
+    results = {h: {"base_rate": [], "baseline": [], "plus_hmm": [], "actual": [], "fold_brier_gains": []} for h in HORIZONS}
     fold_summaries = []
     train_end = min_train
     while train_end + 1 < len(df):
@@ -164,31 +187,29 @@ def run_ablation(features: pd.DataFrame, min_train: int = 1000, test_size: int =
             Xb_test = df[BASE_FEATURES].iloc[test_idx].to_numpy(dtype=float)
             Xh_train = np.hstack([Xb_train, posterior[train_idx]])
             Xh_test = np.hstack([Xb_test, posterior[test_idx]])
-            pbase = _base_rate_predictions(y_train, len(y_test))
             pb = _fit_calibrated_classifier(Xb_train, y_train, Xb_test)
             ph = _fit_calibrated_classifier(Xh_train, y_train, Xh_test)
             if pb is None or ph is None:
                 continue
-            results[horizon]["base_rate"].extend(pbase.tolist())
+            p_base_rate = np.full(len(y_test), float(np.mean(y_train)), dtype=float)
+            results[horizon]["base_rate"].extend(p_base_rate.tolist())
             results[horizon]["baseline"].extend(pb.tolist())
             results[horizon]["plus_hmm"].extend(ph.tolist())
             results[horizon]["actual"].extend(y_test.tolist())
-            fold_brier_base = float(np.mean((np.asarray(pb) - y_test) ** 2))
-            fold_brier_hmm = float(np.mean((np.asarray(ph) - y_test) ** 2))
-            fold_delta = fold_brier_base - fold_brier_hmm
-            results[horizon]["fold_deltas"].append(fold_delta)
+            fold_gain = float(np.mean((pb - y_test) ** 2) - np.mean((ph - y_test) ** 2))
+            results[horizon]["fold_brier_gains"].append(fold_gain)
             fold_info["horizons"][horizon] = {
                 "n": int(len(y_test)),
                 "base_rate": float(np.mean(y_train)),
-                "brier_baseline": fold_brier_base,
-                "brier_plus_hmm": fold_brier_hmm,
-                "brier_improvement": float(fold_delta),
+                "baseline_brier": float(np.mean((pb - y_test) ** 2)),
+                "plus_hmm_brier": float(np.mean((ph - y_test) ** 2)),
+                "brier_improvement": fold_gain,
             }
         fold_summaries.append(fold_info)
         train_end += test_size
     out = {
         "schema_version": "hmm-forecast-ablation-v3",
-        "method": "Expanding OOS; train-only base rate; HMM refit per outer fold; causal filtered posterior; paired moving-block bootstrap; no automatic promotion.",
+        "method": "Expanding OOS; train-only historical base rate; HMM refit per outer fold; causal filtered posterior; paired moving-block bootstrap; no automatic promotion.",
         "baseline_features": BASE_FEATURES,
         "hmm_features": ["p_state_0", "p_state_1", "p_state_2", "p_state_3"],
         "folds": fold_summaries,
@@ -203,29 +224,32 @@ def run_ablation(features: pd.DataFrame, min_train: int = 1000, test_size: int =
         mbase = _metrics(y, vals["base_rate"])
         mb = _metrics(y, vals["baseline"])
         mh = _metrics(y, vals["plus_hmm"])
-        ci = _moving_block_brier_ci(y, vals["baseline"], vals["plus_hmm"], block_size=max(4, HORIZONS[horizon]))
-        fold_deltas = vals["fold_deltas"]
-        fold_win_rate = float(np.mean(np.asarray(fold_deltas) > 0)) if fold_deltas else None
+        steps = HORIZONS[horizon]
+        ci = _moving_block_bootstrap_ci(y, vals["baseline"], vals["plus_hmm"], block_len=steps)
+        fold_gains = vals["fold_brier_gains"]
+        fold_win_rate = float(np.mean(np.asarray(fold_gains) > 0)) if fold_gains else None
         gate = evaluate_research_gate(mb, mh, mbase=mbase, hmm_ci=ci, fold_win_rate=fold_win_rate)
         out["horizons"][horizon] = {
             "available": True,
             "base_rate": mbase,
             "baseline": mb,
             "plus_hmm": mh,
+            "baseline_brier_improvement_vs_base_rate": gate["baseline_brier_improvement_vs_base_rate"],
             "brier_improvement": gate["brier_improvement"],
             "log_loss_improvement": gate["log_loss_improvement"],
             "calibration_improvement": gate["calibration_improvement"],
-            "brier_improvement_ci": ci,
+            "brier_improvement_ci95": ci,
             "fold_win_rate": fold_win_rate,
-            "fold_brier_improvements": [float(x) for x in fold_deltas],
+            "fold_brier_improvements": fold_gains,
             "research_gate": {
                 "thresholds": {
                     "min_oos_n": MIN_OOS_N,
-                    "min_brier_improvement": MIN_BRIER_IMPROVEMENT,
+                    "min_baseline_brier_improvement_vs_base_rate": MIN_BASELINE_BRIER_IMPROVEMENT,
+                    "min_hmm_brier_improvement": MIN_HMM_BRIER_IMPROVEMENT,
                     "min_fold_win_rate": MIN_FOLD_WIN_RATE,
-                    "brier_ci_requires_low_gt_zero": True,
                     "max_log_loss_degradation": MAX_LOGLOSS_DEGRADATION,
                     "max_calibration_degradation": MAX_CALIBRATION_DEGRADATION,
+                    "brier_ci_low_must_be_positive": True,
                 },
                 "components": gate["components"],
                 "failed_reasons": gate["failed_reasons"],
@@ -239,21 +263,21 @@ def render_markdown(report: dict) -> str:
     lines = [
         "# HMM Forecast Ablation Report", "",
         report["method"], "",
-        "| Horizon | OOS n | BaseRate Brier | Baseline Brier | +HMM Brier | ΔBrier | ΔBrier CI | Fold Win | ΔLogLoss | ΔCal | Gate |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        "| Horizon | OOS n | BaseRate Brier | Baseline Brier | +HMM Brier | ΔBase | ΔHMM | CI95 ΔHMM | Fold win | LogLoss Δ | Cal Δ | Gate |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for h, r in report["horizons"].items():
         if not r.get("available"):
-            lines.append(f"| {h} | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | FAIL |")
+            lines.append(f"| {h} | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | FAIL |")
             continue
         br, b, m = r["base_rate"], r["baseline"], r["plus_hmm"]
-        ci = r.get("brier_improvement_ci", {})
-        ci_text = "n/a" if ci.get("low") is None else f"[{ci['low']:+.4f},{ci['high']:+.4f}]"
-        fw = r.get("fold_win_rate")
-        fw_text = "n/a" if fw is None else f"{fw:.0%}"
+        ci = r["brier_improvement_ci95"]
         lines.append(
-            f"| {h} | {m['oos_n']} | {br['brier']:.4f} | {b['brier']:.4f} | {m['brier']:.4f} | {r['brier_improvement']:+.4f} | {ci_text} | {fw_text} | "
-            f"{r['log_loss_improvement']:+.4f} | {r['calibration_improvement']:+.4f} | {'PASS' if r['passes_research_gate'] else 'FAIL'} |"
+            f"| {h} | {m['oos_n']} | {br['brier']:.4f} | {b['brier']:.4f} | {m['brier']:.4f} | "
+            f"{r['baseline_brier_improvement_vs_base_rate']:+.4f} | {r['brier_improvement']:+.4f} | "
+            f"[{ci['low']:+.4f}, {ci['high']:+.4f}] | {r['fold_win_rate']:.0%} | "
+            f"{r['log_loss_improvement']:+.4f} | {r['calibration_improvement']:+.4f} | "
+            f"{'PASS' if r['passes_research_gate'] else 'FAIL'} |"
         )
     lines += ["", "## Research gate details", ""]
     for h, r in report["horizons"].items():
@@ -263,8 +287,10 @@ def render_markdown(report: dict) -> str:
         reasons = r.get("research_gate", {}).get("failed_reasons", [])
         lines.append(
             f"- **{h}**: BaseRate={'PASS' if comps.get('baseline_beats_base_rate') else 'FAIL'}, "
-            f"Brier={'PASS' if comps.get('brier_ok') else 'FAIL'}, CI={'PASS' if comps.get('brier_ci_ok') else 'FAIL'}, "
-            f"FoldWin={'PASS' if comps.get('fold_win_rate_ok') else 'FAIL'}, LogLoss={'PASS' if comps.get('log_loss_ok') else 'FAIL'}, "
+            f"Brier={'PASS' if comps.get('brier_ok') else 'FAIL'}, "
+            f"CI={'PASS' if comps.get('brier_ci_ok') else 'FAIL'}, "
+            f"FoldWin={'PASS' if comps.get('fold_win_rate_ok') else 'FAIL'}, "
+            f"LogLoss={'PASS' if comps.get('log_loss_ok') else 'FAIL'}, "
             f"Calibration={'PASS' if comps.get('calibration_ok') else 'FAIL'}"
             + (f"; reasons={','.join(reasons)}" if reasons else "")
         )
