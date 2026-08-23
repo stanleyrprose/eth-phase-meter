@@ -77,21 +77,48 @@ def _fit_calibrated_classifier(X_train, y_train, X_test):
     return iso.predict(raw)
 
 
-def _paired_brier_improvement_ci(y, p_ref, p_candidate, n_boot=BOOTSTRAP_SAMPLES, seed=BOOTSTRAP_SEED):
+def _paired_brier_improvement_ci(
+    y,
+    p_ref,
+    p_candidate,
+    block_len,
+    n_boot=BOOTSTRAP_SAMPLES,
+    seed=BOOTSTRAP_SEED,
+):
+    """Moving-block paired bootstrap for Brier improvement.
+
+    Overlapping 3D/7D/30D labels create serial dependence, so IID resampling
+    would produce confidence intervals that are too optimistic.
+    """
     y = np.asarray(y, dtype=float)
     p_ref = np.asarray(p_ref, dtype=float)
     p_candidate = np.asarray(p_candidate, dtype=float)
-    if len(y) < 2:
-        return {"low": None, "median": None, "high": None}
+    n = len(y)
+    if n < 2:
+        return {"low": None, "median": None, "high": None, "block_len": int(block_len), "n_boot": 0}
+
     improvement = (p_ref - y) ** 2 - (p_candidate - y) ** 2
+    block_len = max(1, min(int(block_len), n))
+    blocks_needed = int(np.ceil(n / block_len))
+    max_start = max(1, n - block_len + 1)
     rng = np.random.default_rng(seed)
     means = np.empty(n_boot, dtype=float)
-    n = len(improvement)
+
     for i in range(n_boot):
-        idx = rng.integers(0, n, size=n)
+        starts = rng.integers(0, max_start, size=blocks_needed)
+        idx = np.concatenate(
+            [np.arange(start, min(start + block_len, n)) for start in starts]
+        )[:n]
         means[i] = improvement[idx].mean()
+
     low, med, high = np.quantile(means, [0.025, 0.5, 0.975])
-    return {"low": float(low), "median": float(med), "high": float(high)}
+    return {
+        "low": float(low),
+        "median": float(med),
+        "high": float(high),
+        "block_len": int(block_len),
+        "n_boot": int(n_boot),
+    }
 
 
 def _base_rate_prediction(y_train, n_test):
@@ -190,8 +217,8 @@ def run_ablation(features: pd.DataFrame, min_train: int = 1000, test_size: int =
         fold_summaries.append(fold_info)
         train_end += test_size
     out = {
-        "schema_version": "hmm-forecast-ablation-v3",
-        "method": "Expanding OOS; historical base-rate comparator; HMM refit per outer fold; causal filtered posterior only; paired Brier bootstrap CI; no automatic promotion.",
+        "schema_version": "hmm-forecast-ablation-v4",
+        "method": "Expanding OOS; historical base-rate comparator; HMM refit per outer fold; causal filtered posterior only; moving-block paired Brier bootstrap CI for overlapping horizon labels; no automatic promotion.",
         "baseline_features": BASE_FEATURES,
         "hmm_features": ["p_state_0", "p_state_1", "p_state_2", "p_state_3"],
         "folds": fold_summaries,
@@ -206,7 +233,7 @@ def run_ablation(features: pd.DataFrame, min_train: int = 1000, test_size: int =
         mbase = _metrics(y, vals["base_rate"])
         mb = _metrics(y, vals["baseline"])
         mh = _metrics(y, vals["plus_hmm"])
-        hmm_ci = _paired_brier_improvement_ci(y, vals["baseline"], vals["plus_hmm"])
+        hmm_ci = _paired_brier_improvement_ci(y, vals["baseline"], vals["plus_hmm"], block_len=HORIZONS[horizon])
         fold_deltas = np.asarray(vals["fold_deltas"], dtype=float)
         fold_win_rate = float(np.mean(fold_deltas > 0)) if len(fold_deltas) else None
         gate = evaluate_research_gate(mb, mh, mbase=mbase, hmm_ci=hmm_ci, fold_win_rate=fold_win_rate)

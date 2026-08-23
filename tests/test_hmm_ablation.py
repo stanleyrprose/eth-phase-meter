@@ -1,4 +1,4 @@
-from eth_trend_v3.hmm_ablation import evaluate_research_gate
+from eth_trend_v3.hmm_ablation import evaluate_research_gate, _paired_brier_improvement_ci
 
 
 def test_old_30d_report_must_fail_research_gate():
@@ -44,3 +44,22 @@ def test_clear_statistically_supported_improvement_can_pass_gate():
     )
     assert gate["passes"] is True
     assert all(gate["components"].values())
+
+
+def test_moving_block_bootstrap_reports_block_length():
+    y = [0, 1, 0, 1, 0, 1, 0, 1] * 20
+    p_ref = [0.5] * len(y)
+    p_candidate = [0.45 if v == 0 else 0.55 for v in y]
+    ci = _paired_brier_improvement_ci(
+        y,
+        p_ref,
+        p_candidate,
+        block_len=18,
+        n_boot=200,
+        seed=7,
+    )
+    assert ci["block_len"] == 18
+    assert ci["n_boot"] == 200
+    assert ci["low"] is not None
+    assert ci["high"] is not None
+    assert ci["median"] > 0
