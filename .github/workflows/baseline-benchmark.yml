@@ -1,0 +1,28 @@
+name: Forecast Baseline Benchmark
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run baseline benchmark
+        run: python -m scripts.run_baseline_benchmark
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: forecast-baseline-benchmark-report
+          path: eth_reports/baseline_benchmark/
+          if-no-files-found: error
