@@ -15,12 +15,18 @@ class TestPublicExternalState(unittest.TestCase):
                     "CapMVRVCur": "1.10",
                     "SplyCur": "121980000",
                     "SplyExNtv": "15750000",
+                    "AdrActCnt": "800000",
+                    "FeeTotNtv": "200",
+                    "TxCnt": "1700000",
                 },
                 {
                     "time": "2026-08-24T00:00:00.000000000Z",
                     "CapMVRVCur": "1.12",
                     "SplyCur": "121983000",
                     "SplyExNtv": "15718500",
+                    "AdrActCnt": "851215",
+                    "FeeTotNtv": "397.47",
+                    "TxCnt": "1859865",
                 },
             ]
         }
@@ -30,7 +36,26 @@ class TestPublicExternalState(unittest.TestCase):
         self.assertAlmostEqual(state["valuation"]["mvrv"], 1.12)
         self.assertAlmostEqual(state["structural"]["net_issuance_eth"], 3000.0)
         self.assertAlmostEqual(state["structural"]["exchange_balance_change_pct"], -0.2)
+        self.assertEqual(state["structural"]["active_addresses"], 851215.0)
+        self.assertEqual(state["structural"]["network_fees_eth"], 397.47)
+        self.assertEqual(state["structural"]["transaction_count"], 1859865.0)
         self.assertEqual(state["valuation"]["_observed_at"], "2026-08-24T00:00:00.000000000Z")
+
+    @patch("eth_trend_v3.external_state.requests.get")
+    def test_farside_maps_latest_daily_total_and_negative_parentheses(self, get):
+        response = Mock(ok=True)
+        response.text = """
+        <table>
+          <tr><td><span class="tabletext">21 Aug 2026</span></td><td><span class="tabletext">184.0</span></td></tr>
+          <tr><td><span class="tabletext">24 Aug 2026</span></td><td><span class="tabletext">(33.5)</span></td></tr>
+        </table>
+        """
+        get.return_value = response
+
+        flow = external_state._farside_eth_etf_state()["capital_flow"]
+        self.assertEqual(flow["etf_flow_usd"], -33500000.0)
+        self.assertEqual(flow["etf_flow_date"], "2026-08-24")
+        self.assertIn("Farside", flow["_source"])
 
     @patch("eth_trend_v3.external_state.requests.get")
     def test_defillama_supply_change_stays_distinct_from_cex_flow(self, get):

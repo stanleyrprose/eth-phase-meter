@@ -1,10 +1,14 @@
 from __future__ import annotations
+from datetime import datetime, timezone
+import html
 import os
+import re
 import time
 import requests
 
 COINMETRICS_COMMUNITY_URL = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
 DEFILLAMA_ETH_STABLECOIN_URL = "https://stablecoins.llama.fi/stablecoincharts/Ethereum"
+FARSIDE_ETH_ETF_URL = "https://farside.co.uk/eth/"
 
 DUNE_EXECUTE_URL = "https://api.dune.com/api/v1/sql/execute"
 DUNE_RESULT_URL = "https://api.dune.com/api/v1/execution/{execution_id}/results"
@@ -125,13 +129,13 @@ def _merge_dimension(base: dict, enrichment: dict, provider_name: str) -> dict:
 
 
 def _coinmetrics_community_state() -> dict:
-    """Free daily ETH valuation/supply metrics; no API key required."""
+    """Free daily ETH valuation/supply/activity metrics; no API key required."""
     try:
         response = requests.get(
             COINMETRICS_COMMUNITY_URL,
             params={
                 "assets": "eth",
-                "metrics": "CapMVRVCur,SplyExNtv,SplyCur",
+                "metrics": "CapMVRVCur,SplyExNtv,SplyCur,AdrActCnt,FeeTotNtv,TxCnt",
                 "frequency": "1d",
                 "page_size": 3,
                 "paging_from": "end",
@@ -169,7 +173,10 @@ def _coinmetrics_community_state() -> dict:
                 else None
             ),
             "exchange_balance_eth": exchange_now,
-            "_source": "Coin Metrics Community: SplyCur + SplyExNtv",
+            "active_addresses": _float(latest.get("AdrActCnt")),
+            "network_fees_eth": _float(latest.get("FeeTotNtv")),
+            "transaction_count": _float(latest.get("TxCnt")),
+            "_source": "Coin Metrics Community: SplyCur + SplyExNtv + AdrActCnt + FeeTotNtv + TxCnt",
             "_observed_at": observed_at,
         }
         structural = {k: v for k, v in structural.items() if v is not None}
@@ -180,6 +187,68 @@ def _coinmetrics_community_state() -> dict:
     except Exception as exc:
         err = {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "Coin Metrics Community"}
         return {"valuation": dict(err), "structural": dict(err)}
+
+
+def _parse_farside_amount_musd(value: str):
+    text = html.unescape(value or "").replace("\xa0", " ").strip()
+    if not text or text in {"-", "—", "N/A"}:
+        return None
+    negative = text.startswith("(") and text.endswith(")")
+    text = text.strip("()").replace(",", "").replace("$", "")
+    amount = _float(text)
+    if amount is None:
+        return None
+    return -amount if negative else amount
+
+
+def _farside_eth_etf_state() -> dict:
+    """Best-effort public US spot-ETH ETF daily net flow from Farside's published table."""
+    try:
+        response = requests.get(
+            FARSIDE_ETH_ETF_URL,
+            headers={"User-Agent": "eth-phase-meter/1.0 (+https://github.com/stanleyrprose/eth-phase-meter)"},
+            timeout=20,
+        )
+        if not response.ok:
+            return {"capital_flow": _safe_http_error(response, "FARSIDE_ETH_HTTP_ERROR")}
+
+        candidates = []
+        for row_html in re.findall(r"<tr\b[^>]*>(.*?)</tr>", response.text, flags=re.IGNORECASE | re.DOTALL):
+            cells = [
+                html.unescape(re.sub(r"<[^>]+>", "", cell)).replace("\xa0", " ").strip()
+                for cell in re.findall(
+                    r"<span\b[^>]*class=[\"']tabletext[\"'][^>]*>(.*?)</span>",
+                    row_html,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+            ]
+            if len(cells) < 2:
+                continue
+            try:
+                day = datetime.strptime(cells[0], "%d %b %Y").replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            total_musd = _parse_farside_amount_musd(cells[-1])
+            if total_musd is not None:
+                candidates.append((day, total_musd))
+
+        if not candidates:
+            return {"capital_flow": {"_error": "FARSIDE_ETH_TABLE_UNPARSEABLE", "_source": "Farside Investors"}}
+
+        day, total_musd = max(candidates, key=lambda item: item[0])
+        return {
+            "capital_flow": {
+                "etf_flow_usd": total_musd * 1_000_000.0,
+                "etf_flow_musd": total_musd,
+                "etf_flow_date": day.date().isoformat(),
+                "_source": "Farside Investors: US spot ETH ETF daily total net flow",
+                "_observed_at": day.isoformat().replace("+00:00", "Z"),
+            }
+        }
+    except requests.RequestException as exc:
+        return {"capital_flow": {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "Farside Investors"}}
+    except Exception as exc:
+        return {"capital_flow": {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "Farside Investors"}}
 
 
 def _defillama_stablecoin_state() -> dict:
@@ -317,8 +386,9 @@ def collect_external_state() -> dict:
     """Collect ETH-native state with explicit adapters > free baseline > optional Dune enrichment.
 
     Public baseline providers require no credentials:
-    - Coin Metrics Community: MVRV, current supply, exchange-held supply.
+    - Coin Metrics Community: MVRV, current/exchange supply, network activity.
     - DefiLlama: Ethereum stablecoin circulating-supply change.
+    - Farside Investors: best-effort US spot ETH ETF daily total net flow.
 
     Dune remains optional enrichment for CEX/staking flow semantics. A Dune failure is
     retained as provider diagnostics but does not poison a dimension when an independent
@@ -326,11 +396,15 @@ def collect_external_state() -> dict:
     """
     cm = _coinmetrics_community_state()
     llama = _defillama_stablecoin_state()
+    farside = _farside_eth_etf_state()
     result = {
         "valuation": dict(cm.get("valuation") or {}),
         "capital_flow": dict(llama.get("capital_flow") or {}),
         "structural": dict(cm.get("structural") or {}),
     }
+    result["capital_flow"] = _merge_dimension(
+        result["capital_flow"], farside.get("capital_flow") or {}, "farside"
+    )
 
     if os.getenv("DUNE_API_KEY"):
         dune = _dune_external_state()

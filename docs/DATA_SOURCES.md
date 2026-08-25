@@ -19,7 +19,12 @@ No API key is required. The Community API is used at daily frequency for ETH:
 - `CapMVRVCur` → `valuation.mvrv`;
 - `SplyCur` daily difference → `structural.net_issuance_eth`;
 - `SplyExNtv` daily percentage change → `structural.exchange_balance_change_pct`;
-- latest `SplyExNtv` is retained as `structural.exchange_balance_eth` for diagnostics.
+- latest `SplyExNtv` is retained as `structural.exchange_balance_eth` for diagnostics;
+- `AdrActCnt` → `structural.active_addresses` (descriptive only);
+- `FeeTotNtv` → `structural.network_fees_eth` (descriptive only);
+- `TxCnt` → `structural.transaction_count` (descriptive only).
+
+The network-activity fields are retained as evidence/provenance but do not count as Structural Supply score components, because activity is not the same semantic as supply tightening.
 
 The provider's source timestamp is preserved as `_observed_at`; it is not replaced by collection time.
 
@@ -34,6 +39,16 @@ No API key is required. Ethereum stablecoin circulating supply is used to derive
 **Semantic boundary:** stablecoin supply change is not the same metric as stablecoin CEX netflow. It must never be written into `stablecoin_flow_usd`.
 
 The legacy macro path may also use DefiLlama ETH TVL. That TVL signal remains separate from ETH-native supply/flow metrics.
+
+## Public enrichment — Farside ETH ETF flows
+
+No API key is required. The published Farside Investors ETH ETF table is read on a best-effort basis and the latest complete dated row's total is mapped as:
+
+- daily table total in US$m → `capital_flow.etf_flow_usd`;
+- original US$m value → `capital_flow.etf_flow_musd`;
+- table date → `capital_flow.etf_flow_date` and provider `_observed_at`.
+
+This is a public web-table integration rather than a versioned API. Parsing failure, markup change, or temporary blocking is therefore an **optional provider warning**, not a hard Data Health failure when independent Capital Flow data remains available. Attribution is preserved in `_source`.
 
 ## Dune — optional enrichment
 
