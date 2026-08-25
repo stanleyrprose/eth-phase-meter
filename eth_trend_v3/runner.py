@@ -15,15 +15,14 @@ from .feature_cluster import cluster_factors
 from .feature_metadata import enrich_factor_metadata
 from .market_state import build_market_state
 from .data_health import assess as assess_data_health
-from .dataset import HORIZONS, REGIME_CODE, load_pit_records, build_labeled_rows, feature_row
-from .forecast import fit_live_probability
-from .calibration import reliability_from_metrics, probability_state
+from .dataset import HORIZONS, REGIME_CODE, load_pit_records, feature_row
 from .regime import deterministic
 from .hmm_production import infer_live_regime
 from .drift import detect_feature_drift, assess_model_health
 from .anomaly import detect as detect_anomalies
 from .alerts import build_alerts
 from .dashboard import write_dashboard
+from .production_runtime import production_forecast
 
 OUTPUT = Path(core.OUTPUT_DIR)
 
@@ -47,37 +46,30 @@ def _current_features(market_state, regime=None):
 
 
 def _forecast_bundle(records, market_state, health, regime):
+    """Production forecast surface.
+
+    Research candidates are deliberately not fit here. A probability is emitted only
+    when an explicitly promoted PRODUCTION model record can be loaded and its exact
+    feature contract is satisfied. Otherwise every horizon fails closed.
+    """
     current = _current_features(market_state, regime)
+    health_status = health.get("status") or "UNKNOWN"
     out = {}
-    reliabilities = []
-    for horizon, hours in HORIZONS.items():
-        rows = build_labeled_rows(records, hours, timeframe="4h")
-        prob, wf, reason = fit_live_probability(rows, current)
-        metrics = wf.get("metrics") or {}
-        rel = reliability_from_metrics(metrics, float(health.get("coverage", 0)), int(wf.get("sample_size", 0)))
-        if health.get("status") == "DATA_INSUFFICIENT":
-            prob = None
-            reason = "DATA_INSUFFICIENT"
-        if health.get("stale_sources"):
-            prob = None
-            reason = "STALE_DATA"
-        if prob is not None:
-            reliabilities.append(rel)
+    for horizon in HORIZONS:
+        item = production_forecast(horizon, current, health_status)
         out[horizon] = {
-            "probability_up": prob,
-            "state": probability_state(prob),
-            "status": "CALIBRATED" if prob is not None else "UNAVAILABLE",
-            "reliability": rel,
-            "sample_size": wf.get("sample_size", 0),
-            "metrics": metrics,
-            "selected_model": wf.get("selected_model"),
-            "reason": reason,
+            "probability_up": item.get("probability_up"),
+            "baseline_probability": item.get("baseline_probability"),
+            "state": "AVAILABLE" if item.get("probability_up") is not None else "UNAVAILABLE",
+            "status": item.get("status", "UNAVAILABLE"),
+            "reliability": item.get("reliability", "UNAVAILABLE"),
+            "sample_size": 0,
+            "metrics": {},
+            "selected_model": None,
+            "reason": item.get("reason", "NO_PRODUCTION_MODEL_APPROVED"),
         }
-    overall = (
-        "High" if reliabilities and all(x == "High" for x in reliabilities)
-        else "Medium" if reliabilities and any(x in ("High", "Medium") for x in reliabilities)
-        else "Low"
-    )
+    levels = [v["reliability"] for v in out.values() if v.get("probability_up") is not None]
+    overall = "High" if levels and all(x == "HIGH" for x in levels) else "Medium" if levels and any(x in ("HIGH", "MEDIUM") for x in levels) else "Low"
     return out, overall
 
 
