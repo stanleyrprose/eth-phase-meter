@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
 import eth_phase_meter as core
-from eth_trend_v3.dataset import feature_row, pit_history_depth
+from eth_trend_v3.dataset import build_labeled_rows, canonicalize_pit_records, feature_row, pit_history_depth
 from eth_trend_v3.horizon_features import external_feature_contracts, validate_feature_contract
+from eth_trend_v3.research_feature_groups import group_ablation
+from eth_trend_v3.research_readiness import assess_research_readiness
 
 UTC = timezone.utc
 
@@ -82,10 +84,23 @@ def test_pit_history_depth_cannot_be_inflated_by_dense_manual_runs():
         record["observed_at"] = (start + timedelta(minutes=10 * i)).isoformat()
         records.append(record)
     report = pit_history_depth(records)
-    assert report["raw_n"] == 40
-    assert report["horizons"]["3d"]["count_complete_windows"] == 2
+    assert report["source_raw_n"] == 40
+    assert report["raw_n"] == 3
+    assert report["duplicates_removed"] == 37
     assert report["horizons"]["3d"]["span_complete_windows"] == 0
     assert report["horizons"]["3d"]["conservative_nonoverlap_n"] == 0
+
+
+def test_canonical_pit_prefers_scheduled_and_labeled_rows_do_not_duplicate_manual_runs():
+    scheduled=_pit(0); scheduled["observed_at"]="2026-01-01T00:20:00+00:00"; scheduled["github_event"]="schedule"
+    manual=_pit(0); manual["observed_at"]="2026-01-01T00:30:00+00:00"; manual["github_event"]="workflow_dispatch"; manual["metric_value"]["price"]=9999.0
+    future=_pit(18); future["observed_at"]="2026-01-04T00:20:00+00:00"; future["github_event"]="schedule"
+    canonical=canonicalize_pit_records([manual,scheduled,future])
+    assert len(canonical)==2
+    assert canonical[0]["metric_value"]["price"] != 9999.0
+    rows=build_labeled_rows([manual,scheduled,future],72,tolerance_hours=1)
+    assert len(rows)==1
+    assert rows[0]["price"] != 9999.0
 
 def test_fred_details_preserve_observation_date_and_absolute_rate_change(monkeypatch):
     core.fred_latest_details.cache_clear()
@@ -102,3 +117,36 @@ def test_fred_details_preserve_observation_date_and_absolute_rate_change(monkeyp
     assert round(details["change_abs"] * 100, 8) == 5.0
     assert details["observation_date"] == "2026-08-24"
     core.fred_latest_details.cache_clear()
+
+
+def test_research_readiness_waits_without_auto_shadow_or_production():
+    report=assess_research_readiness([_pit(i) for i in range(40)])
+    assert report["status"] == "WAIT_FOR_MORE_PIT"
+    assert report["run_research_benchmark"] is False
+    assert report["automatic_shadow_allowed"] is False
+    assert report["automatic_production_allowed"] is False
+    assert all(not h["production_eligible"] for h in report["horizons"].values())
+
+
+def test_registered_group_ablation_is_research_only_when_data_insufficient():
+    rows=[]
+    for i in range(20):
+        row=feature_row(_pit(i))
+        row["target_up"]=i%2
+        rows.append(row)
+    report=group_ablation(rows)
+    assert report["research_only"] is True
+    assert report["promotion_allowed"] is False
+    assert set(report["groups"]) == {"derivatives","options","macro_rates","crypto_beta"}
+    assert all(not item["production_eligible"] for item in report["groups"].values())
+
+
+def test_group_ablation_marks_mixed_oi_provider_regime():
+    rows=[]
+    for i in range(20):
+        row=feature_row(_pit(i, derivatives_source="Deribit" if i < 15 else "Binance"))
+        row["target_up"]=i%2
+        rows.append(row)
+    report=group_ablation(rows)
+    assert report["provider_provenance"]["mixed_provider_regime"] is True
+    assert report["provider_provenance"]["dominant_derivatives_source"] == "Deribit"

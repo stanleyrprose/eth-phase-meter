@@ -1,0 +1,52 @@
+name: Forecast Research Readiness
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '45 2 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eth-research-readiness
+  cancel-in-progress: false
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements-ci.lock
+      - name: Require durable PIT store
+        run: |
+          if [[ -z "$DATABASE_URL" ]]; then
+            echo 'ERROR: research readiness requires DATABASE_URL.'
+            exit 1
+          fi
+      - id: readiness
+        name: Check canonical PIT research readiness
+        run: python -m scripts.check_research_readiness
+      - name: Run research benchmark when a horizon is ready
+        if: steps.readiness.outputs.run_research_benchmark == 'true'
+        run: python -m scripts.run_backtest
+      - name: Candidate eligibility report (never auto-promotes)
+        if: steps.readiness.outputs.run_research_benchmark == 'true'
+        run: python -m scripts.validate_model
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: forecast-research-readiness-${{ github.run_number }}-${{ github.sha }}
+          path: |
+            eth_reports/research-readiness/
+            eth_reports/model_lab/
+            eth_reports/validation_report.json
+          if-no-files-found: warn
+          retention-days: 90
