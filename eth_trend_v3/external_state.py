@@ -4,6 +4,7 @@ import html
 import os
 import re
 import time
+from zoneinfo import ZoneInfo
 import requests
 
 COINMETRICS_COMMUNITY_URL = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
@@ -98,7 +99,7 @@ def _float(value):
 
 
 def _merge_dimension(base: dict, enrichment: dict, provider_name: str) -> dict:
-    """Merge non-metadata metrics while preserving provenance and optional provider errors."""
+    """Fill missing metrics from enrichment while preserving baseline precedence/provenance."""
     out = dict(base or {})
     enrichment = enrichment or {}
     err = enrichment.get("_error")
@@ -117,7 +118,7 @@ def _merge_dimension(base: dict, enrichment: dict, provider_name: str) -> dict:
     for key, value in enrichment.items():
         if str(key).startswith("_"):
             continue
-        if value is not None:
+        if value is not None and out.get(key) is None:
             out[key] = value
     sources = [x for x in (out.get("_source"), enrichment.get("_source")) if x]
     if sources:
@@ -136,7 +137,7 @@ def _coinmetrics_community_state() -> dict:
             COINMETRICS_COMMUNITY_URL,
             params={
                 "assets": "eth",
-                "metrics": "CapMVRVCur,SplyExNtv,SplyCur,AdrActCnt,FeeTotNtv,TxCnt",
+                "metrics": "CapMVRVCur,SplyExNtv,SplyCur,AdrActCnt,FeeTotNtv,TxCnt,FlowInExNtv,FlowOutExNtv,FlowInExUSD,FlowOutExUSD,IssTotNtv",
                 "frequency": "1d",
                 "page_size": 3,
                 "paging_from": "end",
@@ -145,11 +146,11 @@ def _coinmetrics_community_state() -> dict:
         )
         if not response.ok:
             err = _safe_http_error(response, "COINMETRICS_HTTP_ERROR")
-            return {"valuation": dict(err), "structural": dict(err)}
+            return {"valuation": dict(err), "capital_flow": dict(err), "structural": dict(err)}
         rows = response.json().get("data") or []
         if not rows:
             err = {"_error": "COINMETRICS_EMPTY_RESULT", "_source": "Coin Metrics Community"}
-            return {"valuation": dict(err), "structural": dict(err)}
+            return {"valuation": dict(err), "capital_flow": dict(err), "structural": dict(err)}
         rows = sorted(rows, key=lambda row: str(row.get("time") or ""))
         latest = rows[-1]
         previous = rows[-2] if len(rows) >= 2 else {}
@@ -161,6 +162,19 @@ def _coinmetrics_community_state() -> dict:
             "_observed_at": observed_at,
         }
         valuation = {k: v for k, v in valuation.items() if v is not None}
+
+        exchange_in = _float(latest.get("FlowInExNtv"))
+        exchange_out = _float(latest.get("FlowOutExNtv"))
+        capital_flow = {
+            "exchange_netflow_eth": exchange_in - exchange_out if exchange_in is not None and exchange_out is not None else None,
+            "exchange_inflow_eth": exchange_in,
+            "exchange_outflow_eth": exchange_out,
+            "exchange_inflow_usd": _float(latest.get("FlowInExUSD")),
+            "exchange_outflow_usd": _float(latest.get("FlowOutExUSD")),
+            "_source": "Coin Metrics Community: FlowInExNtv + FlowOutExNtv",
+            "_observed_at": observed_at,
+        }
+        capital_flow = {k: v for k, v in capital_flow.items() if v is not None}
 
         supply_now = _float(latest.get("SplyCur"))
         supply_prev = _float(previous.get("SplyCur"))
@@ -177,17 +191,18 @@ def _coinmetrics_community_state() -> dict:
             "active_addresses": _float(latest.get("AdrActCnt")),
             "network_fees_eth": _float(latest.get("FeeTotNtv")),
             "transaction_count": _float(latest.get("TxCnt")),
-            "_source": "Coin Metrics Community: SplyCur + SplyExNtv + AdrActCnt + FeeTotNtv + TxCnt",
+            "gross_issuance_eth": _float(latest.get("IssTotNtv")),
+            "_source": "Coin Metrics Community: SplyCur + SplyExNtv + AdrActCnt + FeeTotNtv + TxCnt + IssTotNtv",
             "_observed_at": observed_at,
         }
         structural = {k: v for k, v in structural.items() if v is not None}
-        return {"valuation": valuation, "structural": structural}
+        return {"valuation": valuation, "capital_flow": capital_flow, "structural": structural}
     except requests.RequestException as exc:
         err = {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "Coin Metrics Community"}
-        return {"valuation": dict(err), "structural": dict(err)}
+        return {"valuation": dict(err), "capital_flow": dict(err), "structural": dict(err)}
     except Exception as exc:
         err = {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "Coin Metrics Community"}
-        return {"valuation": dict(err), "structural": dict(err)}
+        return {"valuation": dict(err), "capital_flow": dict(err), "structural": dict(err)}
 
 
 def _parse_farside_amount_musd(value: str):
@@ -241,6 +256,14 @@ def _farside_candidates(text: str) -> list[tuple[datetime, float]]:
     return candidates
 
 
+def _latest_closed_farside_candidate(candidates: list[tuple[datetime, float]], today_et=None):
+    """Use the latest prior US trading-date row; same-day Farside rows may be placeholders/incomplete."""
+    if today_et is None:
+        today_et = datetime.now(ZoneInfo("America/New_York")).date()
+    closed = [item for item in candidates if item[0].date() < today_et]
+    return max(closed, key=lambda item: item[0]) if closed else None
+
+
 def _farside_eth_etf_state() -> dict:
     """Best-effort Farside ETH ETF flow with a read-only Jina fallback for bot-blocked runners."""
     headers = {"User-Agent": "eth-phase-meter/1.0 (+https://github.com/stanleyrprose/eth-phase-meter)"}
@@ -249,8 +272,9 @@ def _farside_eth_etf_state() -> dict:
         response = requests.get(FARSIDE_ETH_ETF_URL, headers=headers, timeout=20)
         if response.ok:
             candidates = _farside_candidates(response.text)
-            if candidates:
-                day, total_musd = max(candidates, key=lambda item: item[0])
+            latest_closed = _latest_closed_farside_candidate(candidates)
+            if latest_closed:
+                day, total_musd = latest_closed
                 return {
                     "capital_flow": {
                         "etf_flow_usd": total_musd * 1_000_000.0,
@@ -274,15 +298,16 @@ def _farside_eth_etf_state() -> dict:
             err["_source"] = "Farside Investors via Jina Reader"
             return {"capital_flow": err}
         candidates = _farside_candidates(proxy.text)
-        if not candidates:
+        latest_closed = _latest_closed_farside_candidate(candidates)
+        if not latest_closed:
             return {
                 "capital_flow": {
-                    "_error": "FARSIDE_JINA_TABLE_UNPARSEABLE",
+                    "_error": "FARSIDE_JINA_NO_CLOSED_DAILY_ROW",
                     "message": f"direct={direct_error}"[:300],
                     "_source": "Farside Investors via Jina Reader",
                 }
             }
-        day, total_musd = max(candidates, key=lambda item: item[0])
+        day, total_musd = latest_closed
         return {
             "capital_flow": {
                 "etf_flow_usd": total_musd * 1_000_000.0,
@@ -458,11 +483,20 @@ def collect_external_state() -> dict:
     farside = _farside_eth_etf_state()
     result = {
         "valuation": dict(cm.get("valuation") or {}),
-        "capital_flow": dict(llama.get("capital_flow") or {}),
-        "structural": dict(cm.get("structural") or {}),
+        "capital_flow": {},
+        "structural": {},
     }
     result["capital_flow"] = _merge_dimension(
+        result["capital_flow"], cm.get("capital_flow") or {}, "coinmetrics"
+    )
+    result["capital_flow"] = _merge_dimension(
+        result["capital_flow"], llama.get("capital_flow") or {}, "defillama"
+    )
+    result["capital_flow"] = _merge_dimension(
         result["capital_flow"], farside.get("capital_flow") or {}, "farside"
+    )
+    result["structural"] = _merge_dimension(
+        result["structural"], cm.get("structural") or {}, "coinmetrics"
     )
 
     if os.getenv("DUNE_API_KEY"):

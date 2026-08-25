@@ -59,6 +59,7 @@ class TestDuneExternalState(unittest.TestCase):
         os.environ["DUNE_API_KEY"] = "test-only"
         coinmetrics.return_value = {
             "valuation": {"mvrv": 1.2},
+            "capital_flow": {"exchange_netflow_eth": -5000.0, "_source": "Coin Metrics Community"},
             "structural": {"net_issuance_eth": 2800.0},
         }
         defillama.return_value = {
@@ -75,7 +76,7 @@ class TestDuneExternalState(unittest.TestCase):
         r = external_state.collect_external_state()
         self.assertEqual(r["capital_flow"]["stablecoin_supply_change_usd"], 125000000.0)
         self.assertEqual(r["capital_flow"]["stablecoin_flow_usd"], 250000000.0)
-        self.assertEqual(r["capital_flow"]["exchange_netflow_eth"], -12000.0)
+        self.assertEqual(r["capital_flow"]["exchange_netflow_eth"], -5000.0)
         self.assertEqual(r["structural"]["staking_netflow_eth"], 18000.0)
         self.assertEqual(r["valuation"]["mvrv"], 1.2)
 

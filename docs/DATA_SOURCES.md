@@ -10,21 +10,24 @@ For each ETH-native dimension, data selection is:
 2. credential-free public baseline providers;
 3. Dune as optional enrichment for metrics whose semantics are not available from the public baseline.
 
-Missing metrics are never replaced by zero. Provider failures and provenance remain explicit.
+Enrichment fills missing fields only; it must not overwrite an already available higher-precedence baseline metric. Missing metrics are never replaced by zero. Provider failures and provenance remain explicit.
 
 ## Public baseline — Coin Metrics Community
 
 No API key is required. The Community API is used at daily frequency for ETH:
 
 - `CapMVRVCur` → `valuation.mvrv`;
+- `FlowInExNtv - FlowOutExNtv` → `capital_flow.exchange_netflow_eth` (deposit-positive / withdrawal-negative);
+- raw `FlowInExNtv`, `FlowOutExNtv`, `FlowInExUSD`, `FlowOutExUSD` are retained for audit diagnostics;
 - `SplyCur` daily difference → `structural.net_issuance_eth`;
 - `SplyExNtv` daily percentage change → `structural.exchange_balance_change_pct`;
 - latest `SplyExNtv` is retained as `structural.exchange_balance_eth` for diagnostics;
 - `AdrActCnt` → `structural.active_addresses` (descriptive only);
 - `FeeTotNtv` → `structural.network_fees_eth` (descriptive only);
-- `TxCnt` → `structural.transaction_count` (descriptive only).
+- `TxCnt` → `structural.transaction_count` (descriptive only);
+- `IssTotNtv` → `structural.gross_issuance_eth` (descriptive only; net supply change remains the scored issuance component).
 
-The network-activity fields are retained as evidence/provenance but do not count as Structural Supply score components, because activity is not the same semantic as supply tightening.
+The network-activity and gross-issuance diagnostic fields are retained as evidence/provenance but do not add separate Structural Supply score votes. In particular, gross issuance must not be counted alongside net issuance as independent evidence.
 
 The provider's source timestamp is preserved as `_observed_at`; it is not replaced by collection time.
 
@@ -48,7 +51,7 @@ No API key is required. The published Farside Investors ETH ETF table is read on
 - original US$m value → `capital_flow.etf_flow_musd`;
 - table date → `capital_flow.etf_flow_date` and provider `_observed_at`.
 
-This is a public web-table integration rather than a versioned API. The collector first requests Farside directly; if a bot-protected runner receives an HTTP/blocking failure, it may retry the same Farside page through the read-only Jina Reader transport. When that fallback is used, `_source` explicitly says `Farside Investors via Jina Reader`. Parsing failure, markup change, or temporary blocking of both paths is an **optional provider warning**, not a hard Data Health failure when independent Capital Flow data remains available.
+This is a public web-table integration rather than a versioned API. The collector first requests Farside directly; if a bot-protected runner receives an HTTP/blocking failure, it may retry the same Farside page through the read-only Jina Reader transport. When that fallback is used, `_source` explicitly says `Farside Investors via Jina Reader`. The collector only accepts rows dated before the current `America/New_York` calendar day, because Farside may expose a same-day placeholder/partial row (including `0.0`) before the US trading day is complete. Parsing failure, markup change, or temporary blocking of both paths is an **optional provider warning**, not a hard Data Health failure when independent Capital Flow data remains available.
 
 ## Dune — optional enrichment
 

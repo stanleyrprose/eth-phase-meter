@@ -18,4 +18,10 @@ class TestMarketState(unittest.TestCase):
         self.assertEqual(flow['score'],100)
         self.assertEqual(flow['coverage'],25)
 
+    def test_three_independent_capital_flow_components_give_75pct_coverage(self):
+        r=SimpleNamespace(quality={'families':{'Technical':{'nominal':40,'active':40,'coverage':100,'contribution':20}}},crowding=50,volatility=30)
+        state=build_market_state({'valuation':{},'capital_flow':{'etf_flow_usd':115_600_000,'exchange_netflow_eth':-18_166,'stablecoin_supply_change_usd':484_900_000},'structural':{}},r)
+        flow=state['dimensions']['capital_flow']
+        self.assertEqual(flow['coverage'],75)
+
 if __name__=='__main__': unittest.main()
