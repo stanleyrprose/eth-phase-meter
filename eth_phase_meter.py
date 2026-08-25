@@ -28,6 +28,7 @@ import math
 import datetime as dt
 import traceback
 from pathlib import Path
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -1094,17 +1095,32 @@ def fetch_fred_series(series_id: str, limit: int = 5):
         return None
 
 
-def fred_latest_and_change(series_id: str):
-    """返回 (latest_value, day_change_pct)"""
+@lru_cache(maxsize=32)
+def fred_latest_details(series_id: str):
+    """Return PIT-safe latest FRED observation details for one collector process."""
     obs = fetch_fred_series(series_id, limit=5)
-    if not obs or len(obs) < 2:
-        if obs and len(obs) == 1:
-            return float(obs[0]["value"]), None
-        return None, None
+    if not obs:
+        return None
     latest = float(obs[0]["value"])
-    prev = float(obs[1]["value"])
-    chg = (latest - prev) / abs(prev) if prev else 0
-    return latest, chg
+    previous = float(obs[1]["value"]) if len(obs) >= 2 else None
+    change_pct = (latest - previous) / abs(previous) if previous not in (None, 0) else None
+    return {
+        "value": latest,
+        "previous": previous,
+        "change_pct": change_pct,
+        "change_abs": latest - previous if previous is not None else None,
+        "observation_date": obs[0].get("date"),
+        "realtime_start": obs[0].get("realtime_start"),
+        "realtime_end": obs[0].get("realtime_end"),
+    }
+
+
+def fred_latest_and_change(series_id: str):
+    """返回 (latest_value, day_change_pct); source details stay available via fred_latest_details()."""
+    details = fred_latest_details(series_id)
+    if not details:
+        return None, None
+    return details["value"], details["change_pct"]
 
 
 # ─── yfinance 备选 ───
@@ -1125,14 +1141,15 @@ def fetch_yfinance_quote(ticker: str):
         return None, None
 
 
-def get_macro_indicator(fred_id: str, yf_ticker: str):
-    """FRED 优先，失败回退 yfinance"""
+def get_macro_indicator(fred_id: str, yf_ticker: str | None):
+    """FRED first; use yfinance only when a semantically compatible fallback is explicitly supplied."""
     val, chg = fred_latest_and_change(fred_id)
     if val is not None:
         return val, chg, "FRED"
-    val, chg = fetch_yfinance_quote(yf_ticker)
-    if val is not None:
-        return val, chg, "yfinance"
+    if yf_ticker:
+        val, chg = fetch_yfinance_quote(yf_ticker)
+        if val is not None:
+            return val, chg, "yfinance"
     return None, None, None
 
 
@@ -1463,13 +1480,18 @@ def fetch_macro():
         result["usdc_usdt"] = float(usdcusdt.get("price", 1))
 
     # 传统宏观（FRED 优先 → yfinance 备选）
-    # FRED series: DTWEXBGS(DXY宽), DGS10(10Y), DGS2(2Y), VIXCLS(VIX)
-    print("  📡 拉取 DXY...")
+    # DTWEXBGS is the Fed nominal broad USD index, not ICE DXY; legacy `dxy` keys are preserved for compatibility.
+    # Treasury series are daily H.15 observations. Retrieval happens inside the PIT collector, so research only uses values
+    # that were actually known by the snapshot time; FRED observation dates are retained when the FRED path is active.
+    print("  📡 拉取 Broad USD Index...")
     dxy_val, dxy_chg, dxy_src = get_macro_indicator("DTWEXBGS", "DX-Y.NYB")
     if dxy_val is not None:
         result["dxy"] = dxy_val
         result["dxy_chg"] = dxy_chg
         result["dxy_src"] = dxy_src
+        if dxy_src == "FRED":
+            details = fred_latest_details("DTWEXBGS") or {}
+            result["dxy_observation_date"] = details.get("observation_date")
 
     print("  📡 拉取 VIX...")
     vix_val, vix_chg, vix_src = get_macro_indicator("VIXCLS", "^VIX")
@@ -1484,13 +1506,36 @@ def fetch_macro():
         result["us10y"] = us10y_val
         result["us10y_chg"] = us10y_chg
         result["us10y_src"] = us10y_src
+        if us10y_src == "FRED":
+            details = fred_latest_details("DGS10") or {}
+            if details.get("change_abs") is not None:
+                result["us10y_change_bps"] = details["change_abs"] * 100.0
+            result["us10y_observation_date"] = details.get("observation_date")
 
     print("  📡 拉取 US2Y...")
-    us2y_val, us2y_chg, us2y_src = get_macro_indicator("DGS2", "^IRX")
+    us2y_val, us2y_chg, us2y_src = get_macro_indicator("DGS2", None)
     if us2y_val is not None:
         result["us2y"] = us2y_val
         result["us2y_chg"] = us2y_chg
         result["us2y_src"] = us2y_src
+        if us2y_src == "FRED":
+            details = fred_latest_details("DGS2") or {}
+            if details.get("change_abs") is not None:
+                result["us2y_change_bps"] = details["change_abs"] * 100.0
+            result["us2y_observation_date"] = details.get("observation_date")
+
+    print("  📡 拉取 US10Y Real Yield...")
+    real10 = fred_latest_details("DFII10") if FRED_API_KEY else None
+    if real10:
+        result["real10y"] = real10["value"]
+        result["real10y_chg"] = real10["change_pct"]
+        result["real10y_src"] = "FRED"
+        result["real10y_observation_date"] = real10.get("observation_date")
+        if real10.get("change_abs") is not None:
+            result["real10y_change_bps"] = real10["change_abs"] * 100.0
+
+    if us10y_val is not None and us2y_val is not None and us10y_src == "FRED" and us2y_src == "FRED":
+        result["yield_curve_10y2y_pp"] = us10y_val - us2y_val
 
     # 经济日历
     print("  📡 拉取经济日历...")

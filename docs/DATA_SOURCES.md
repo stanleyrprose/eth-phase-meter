@@ -124,3 +124,54 @@ In particular:
 ## Benchmark → Proxy → Validation → Scale
 
 A self-developed ETH cost-basis/SOPR-like proxy must remain Experimental until benchmark validation passes. `eth_trend_v3.eth_proxy_validation.validate_proxy` implements the first correlation/extreme-zone kill gate. A failed proxy must not be labeled ETH-SOPR.
+
+
+## Forecast Research feature-depth policy (2026-08-25)
+
+The next research priority is **observation depth first, feature depth second, provider breadth last**. The repository therefore does not add a new paid data provider in this change.
+
+### Observation depth
+
+Every 4h PIT snapshot remains the source of truth for what the model actually knew at that time. `system_status.json` now reports a `pit_history_depth` diagnostic with:
+
+- raw 4h PIT count;
+- first/last observation and temporal span;
+- conservative non-overlap counts for 3D / 7D / 30D;
+- explicit `DIAGNOSTIC` / `effective_evidence_confirmed=false` semantics.
+
+These counters are progress telemetry only. They never grant Shadow or Production eligibility.
+
+### Existing derivatives / options promoted to research candidates, not production features
+
+No new derivatives provider is required for the first feature-depth step. Existing PIT payloads already contain useful independent information:
+
+- perpetual `funding_rate`;
+- provider-native `open_interest` plus `derivatives_source` provenance;
+- Deribit aggregate `put_call_oi_ratio`;
+- near-expiry ATM IV;
+- near-expiry OTM put-call IV skew proxy;
+- near-vs-next ATM IV term structure.
+
+Deribit perpetual/inverse-futures open interest is reported in USD units, while another provider can use different amount semantics. For that reason raw OI level must **not** be treated as one continuous cross-provider numeric series. Any OI change feature must be derived within a consistent provider/unit regime or rejected as unavailable.
+
+These fields are exposed through the PIT research dataset and registered in `external_feature_contracts()`. Registration does not add them to an approved model; incremental value must still be established through purged OOS ablation.
+
+### FRED macro context for 7D / 30D
+
+The enabled FRED path now explicitly records the following daily research candidates:
+
+- `DTWEXBGS` — Nominal Broad U.S. Dollar Index; legacy `dxy` keys are retained for compatibility but the source is not ICE DXY;
+- `DGS10` — 10Y nominal Treasury yield;
+- `DGS2` — 2Y nominal Treasury yield;
+- `DFII10` — 10Y inflation-indexed Treasury real yield;
+- derived 10Y minus 2Y curve slope.
+
+For Treasury yields, the research payload stores daily changes in **basis points** in addition to legacy relative-change fields. FRED observation dates are retained when the FRED path is used. The authoritative availability time for the forward-collected research dataset remains the PIT snapshot retrieval time, preventing later-released observations from being backfilled as if they were known earlier.
+
+The runtime contract checks all four FRED series when `FRED_API_KEY` is configured. FRED remains a research/macro dependency with existing fallbacks where available; a missing value is marked missing rather than silently zero-filled.
+
+### Provider-breadth decision
+
+Do not add Glassnode/CryptoQuant-like paid on-chain providers, additional social feeds, or a paid Dune tier merely to increase feature count. A new provider becomes justified only when an ablation result identifies a missing information cluster with plausible incremental value that cannot be reconstructed from existing PIT sources.
+
+The next candidate for a genuinely new information cluster remains exact staking / validator-flow data. It stays research-only and is intentionally deferred until the current feature set has accumulated enough real PIT history to evaluate first.

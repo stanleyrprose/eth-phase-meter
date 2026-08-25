@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .dataset import HORIZONS
+from .dataset import HORIZONS, load_pit_records, pit_history_depth
 from .experiment_registry import load_experiment
 from .governance import holdout_record
 from .model_artifact import load_model_artifact
@@ -17,6 +18,7 @@ def build_system_status() -> dict:
     monitor = load_latest_record("monitor_state_4h") or {}
     forecasts = monitor.get("forecasts") or {}
     shadows = load_shadow_records()
+    pit_depth = pit_history_depth(load_pit_records(os.getenv("DATABASE_URL")))
     horizons = {}
     production_active = False
     for horizon in HORIZONS:
@@ -62,6 +64,7 @@ def build_system_status() -> dict:
         "engineering_scope": "Forecast Research Phase 1-9 / PRD v2.3",
         "statistical_production_status": "GRANTED_FOR_ACTIVE_APPROVALS" if production_active else "NOT_GRANTED",
         "data_health": monitor.get("data_health") or {},
+        "pit_history_depth": pit_depth,
         "horizons": horizons,
     }
 

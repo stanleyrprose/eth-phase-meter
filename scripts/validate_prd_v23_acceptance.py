@@ -43,7 +43,7 @@ def _local_checks() -> dict[int, tuple[bool, list[str]]]:
         7: ('PRODUCTION' in ALLOWED_TRANSITIONS.get('SHADOW', set()) and 'PRODUCTION' not in ALLOWED_TRANSITIONS.get('EXPERIMENTAL', set()) and _exists('eth_trend_v3/model_state.py'), ['lifecycle state machine','persistent model state']),
         8: (_contains('eth_trend_v3/dynamic_baseline.py','evaluate_baselines','expanding','rolling','ewma'), ['dynamic baseline candidates']),
         9: (_contains('eth_trend_v3/horizon_features.py','build_horizon_features','3d','7d','30d'), ['horizon-aligned features']),
-        10: ({'funding','basis','open_interest','exchange_netflow_eth','stablecoin_flow_usd','staking_netflow_eth'}.issubset(contracts) and _exists('docs/DATA_SOURCES.md'), ['macro/derivatives/flow contracts','DATA_SOURCES.md']),
+        10: ({'funding_rate','basis','open_interest','exchange_netflow_eth','stablecoin_flow_usd','staking_netflow_eth'}.issubset(contracts) and _exists('docs/DATA_SOURCES.md'), ['macro/derivatives/flow contracts','DATA_SOURCES.md']),
         11: (_contains('eth_trend_v3/probabilistic_research.py','evaluate_logistic','passes_incremental_gate'), ['simple probabilistic benchmark']),
         12: (_contains('eth_trend_v3/probabilistic_research.py','controlled_interactions','20'), ['controlled interactions <=20']),
         13: (_contains('eth_trend_v3/feature_ablation_research.py','run_group_ablation'), ['feature ablation engine']),
