@@ -247,6 +247,9 @@ def main():
     gate = f"🚦 Execution Gate: <b>{r1.execution_gate}</b> | {r1.execution_reason}"
     print(gate)
     gate_notification = core.send_tg_message(gate)
+    p4["execution_gate_notification"] = gate_notification
+    persist_json_record("monitor_state_4h", p4)
+    (OUTPUT / "v3_snapshot_4h.json").write_text(json.dumps(p4, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     summary["notification"] = {
         "forecast_summary": p4.get("notification"),
         "execution_gate": gate_notification,
