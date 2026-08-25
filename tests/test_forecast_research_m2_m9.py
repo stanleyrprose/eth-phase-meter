@@ -62,6 +62,6 @@ def test_shadow_path_metrics_and_data_health_segmentation():
 
 
 def test_promotion_hard_gate_and_manual_override_cannot_promote():
-    evidence={"leakage_free":True,"pit_valid":True,"registry_complete":True,"artifact_valid":True,"train_serve_parity":True,"shadow_complete":True,"data_health_normal":True,"emergency_freeze_clear":True,"research_brier_skill":.03,"shadow_brier_skill":.02,"data_health":"NORMAL","calibration_error":.08}
+    evidence={"leakage_free":True,"pit_valid":True,"registry_complete":True,"artifact_valid":True,"train_serve_parity":True,"shadow_complete":True,"data_health_normal":True,"emergency_freeze_clear":True,"effective_shadow_confirmed":True,"research_brier_skill":.03,"shadow_brier_skill":.02,"data_health":"NORMAL","calibration_error":.08}
     d=promotion_gate(evidence); assert d.eligible and reliability(evidence)=="MEDIUM"
     with pytest.raises(ValueError): emergency_override("PROMOTE",operator="x",reason="no")
