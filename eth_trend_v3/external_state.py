@@ -9,6 +9,7 @@ import requests
 COINMETRICS_COMMUNITY_URL = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
 DEFILLAMA_ETH_STABLECOIN_URL = "https://stablecoins.llama.fi/stablecoincharts/Ethereum"
 FARSIDE_ETH_ETF_URL = "https://farside.co.uk/eth/"
+JINA_FARSIDE_ETH_ETF_URL = "https://r.jina.ai/https://farside.co.uk/eth/"
 
 DUNE_EXECUTE_URL = "https://api.dune.com/api/v1/sql/execute"
 DUNE_RESULT_URL = "https://api.dune.com/api/v1/execution/{execution_id}/results"
@@ -201,54 +202,112 @@ def _parse_farside_amount_musd(value: str):
     return -amount if negative else amount
 
 
-def _farside_eth_etf_state() -> dict:
-    """Best-effort public US spot-ETH ETF daily net flow from Farside's published table."""
-    try:
-        response = requests.get(
-            FARSIDE_ETH_ETF_URL,
-            headers={"User-Agent": "eth-phase-meter/1.0 (+https://github.com/stanleyrprose/eth-phase-meter)"},
-            timeout=20,
-        )
-        if not response.ok:
-            return {"capital_flow": _safe_http_error(response, "FARSIDE_ETH_HTTP_ERROR")}
+def _farside_candidates(text: str) -> list[tuple[datetime, float]]:
+    candidates = []
 
-        candidates = []
-        for row_html in re.findall(r"<tr\b[^>]*>(.*?)</tr>", response.text, flags=re.IGNORECASE | re.DOTALL):
-            cells = [
-                html.unescape(re.sub(r"<[^>]+>", "", cell)).replace("\xa0", " ").strip()
-                for cell in re.findall(
-                    r"<span\b[^>]*class=[\"']tabletext[\"'][^>]*>(.*?)</span>",
-                    row_html,
-                    flags=re.IGNORECASE | re.DOTALL,
-                )
-            ]
-            if len(cells) < 2:
-                continue
+    for row_html in re.findall(r"<tr\b[^>]*>(.*?)</tr>", text, flags=re.IGNORECASE | re.DOTALL):
+        cells = [
+            html.unescape(re.sub(r"<[^>]+>", "", cell)).replace("\xa0", " ").strip()
+            for cell in re.findall(
+                r"<span\b[^>]*class=[\"']tabletext[\"'][^>]*>(.*?)</span>",
+                row_html,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        ]
+        if len(cells) >= 2:
             try:
                 day = datetime.strptime(cells[0], "%d %b %Y").replace(tzinfo=timezone.utc)
             except ValueError:
-                continue
-            total_musd = _parse_farside_amount_musd(cells[-1])
-            if total_musd is not None:
-                candidates.append((day, total_musd))
+                pass
+            else:
+                total_musd = _parse_farside_amount_musd(cells[-1])
+                if total_musd is not None:
+                    candidates.append((day, total_musd))
 
+    for line in text.splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        try:
+            day = datetime.strptime(cells[0], "%d %b %Y").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        total_musd = _parse_farside_amount_musd(cells[-1])
+        if total_musd is not None:
+            candidates.append((day, total_musd))
+
+    return candidates
+
+
+def _farside_eth_etf_state() -> dict:
+    """Best-effort Farside ETH ETF flow with a read-only Jina fallback for bot-blocked runners."""
+    headers = {"User-Agent": "eth-phase-meter/1.0 (+https://github.com/stanleyrprose/eth-phase-meter)"}
+    direct_error = None
+    try:
+        response = requests.get(FARSIDE_ETH_ETF_URL, headers=headers, timeout=20)
+        if response.ok:
+            candidates = _farside_candidates(response.text)
+            if candidates:
+                day, total_musd = max(candidates, key=lambda item: item[0])
+                return {
+                    "capital_flow": {
+                        "etf_flow_usd": total_musd * 1_000_000.0,
+                        "etf_flow_musd": total_musd,
+                        "etf_flow_date": day.date().isoformat(),
+                        "_source": "Farside Investors: US spot ETH ETF daily total net flow",
+                        "_observed_at": day.isoformat().replace("+00:00", "Z"),
+                    }
+                }
+            direct_error = {"_error": "FARSIDE_ETH_TABLE_UNPARSEABLE"}
+        else:
+            direct_error = _safe_http_error(response, "FARSIDE_ETH_HTTP_ERROR")
+    except requests.RequestException as exc:
+        direct_error = {"_error": type(exc).__name__, "message": str(exc)[:300]}
+
+    try:
+        proxy = requests.get(JINA_FARSIDE_ETH_ETF_URL, headers=headers, timeout=30)
+        if not proxy.ok:
+            err = _safe_http_error(proxy, "FARSIDE_JINA_HTTP_ERROR")
+            err["message"] = f"direct={direct_error}; proxy={err.get('message')}"[:300]
+            err["_source"] = "Farside Investors via Jina Reader"
+            return {"capital_flow": err}
+        candidates = _farside_candidates(proxy.text)
         if not candidates:
-            return {"capital_flow": {"_error": "FARSIDE_ETH_TABLE_UNPARSEABLE", "_source": "Farside Investors"}}
-
+            return {
+                "capital_flow": {
+                    "_error": "FARSIDE_JINA_TABLE_UNPARSEABLE",
+                    "message": f"direct={direct_error}"[:300],
+                    "_source": "Farside Investors via Jina Reader",
+                }
+            }
         day, total_musd = max(candidates, key=lambda item: item[0])
         return {
             "capital_flow": {
                 "etf_flow_usd": total_musd * 1_000_000.0,
                 "etf_flow_musd": total_musd,
                 "etf_flow_date": day.date().isoformat(),
-                "_source": "Farside Investors: US spot ETH ETF daily total net flow",
+                "_source": "Farside Investors via Jina Reader: US spot ETH ETF daily total net flow",
                 "_observed_at": day.isoformat().replace("+00:00", "Z"),
             }
         }
     except requests.RequestException as exc:
-        return {"capital_flow": {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "Farside Investors"}}
+        return {
+            "capital_flow": {
+                "_error": type(exc).__name__,
+                "message": f"direct={direct_error}; proxy={str(exc)[:180]}"[:300],
+                "_source": "Farside Investors via Jina Reader",
+            }
+        }
     except Exception as exc:
-        return {"capital_flow": {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "Farside Investors"}}
+        return {
+            "capital_flow": {
+                "_error": type(exc).__name__,
+                "message": str(exc)[:300],
+                "_source": "Farside Investors via Jina Reader",
+            }
+        }
 
 
 def _defillama_stablecoin_state() -> dict:
