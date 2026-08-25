@@ -46,12 +46,15 @@ def build_market_state(raw: dict, result) -> dict:
     etf = _num(flow_raw, "etf_flow_usd", "etf_netflow")
     exchange = _num(flow_raw, "exchange_netflow_eth", "exchange_netflow")
     stable = _num(flow_raw, "stablecoin_flow_usd", "stablecoin_netflow")
+    stable_supply = _num(flow_raw, "stablecoin_supply_change_usd")
     if etf is not None:
         fvals.append(_clip(etf / 250_000_000 * 100))
     if exchange is not None:
         fvals.append(_clip(-exchange / 100_000 * 100))
     if stable is not None:
         fvals.append(_clip(stable / 500_000_000 * 100))
+    if stable_supply is not None:
+        fvals.append(_clip(stable_supply / 500_000_000 * 100))
     capital_flow = sum(fvals) / len(fvals) if fvals else None
 
     structural_raw = raw.get("structural") or {}
@@ -73,7 +76,7 @@ def build_market_state(raw: dict, result) -> dict:
     dimensions = {
         "trend": StateDimension("Trend", trend, float(tech.get("coverage", 0)), "price trend and momentum strength", {"technical_family": tech}),
         "valuation": StateDimension("Valuation", valuation, 100 * len(vals) / 3, "positive=cheap/supportive; negative=expensive", valuation_raw),
-        "capital_flow": StateDimension("Capital Flow", capital_flow, 100 * len(fvals) / 3, "positive=net capital support", flow_raw),
+        "capital_flow": StateDimension("Capital Flow", capital_flow, 100 * len(fvals) / 4, "positive=net capital support", flow_raw),
         "crowding": StateDimension("Leverage / Crowding", float(result.crowding), 100, "0=uncrowded, 100=extremely crowded", {}),
         "structural_supply": StateDimension("Structural Supply", structural, 100 * len(svals) / 4, "positive=tighter liquid supply", structural_raw),
         "volatility_risk": StateDimension("Volatility / Risk", float(result.volatility), 100, "0=normal risk, 100=extreme volatility risk", {}),

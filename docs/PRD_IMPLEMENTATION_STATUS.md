@@ -9,6 +9,8 @@ This repository implements the engineering and quantitative framework from the E
 - PIT recorder with raw payload hash, versions, Git SHA and workflow run ID.
 - PostgreSQL JSONB external persistence hook; artifact-only mode explicitly degraded.
 - Data-health model: coverage, stale flags, errors, source status.
+- Credential-free ETH-native public baseline: Coin Metrics Community MVRV/supply/exchange-supply plus DefiLlama Ethereum stablecoin-supply change; provider timestamps/provenance preserved.
+- Dune retained as optional enrichment for semantically distinct CEX/staking flows; a Dune tier failure no longer invalidates independent public baseline metrics.
 - Six-dimensional Market State Vector: Trend, Valuation, Capital Flow, Crowding, Structural Supply, Volatility/Risk.
 - Feature clustering to prevent MA/MACD/RSI-style duplicated evidence from entering the forecast as separate model layers.
 - Normalization utilities: rolling percentile, robust z-score, expanding percentile.
@@ -32,7 +34,7 @@ The following are implemented but must remain `UNAVAILABLE`, `GATED`, or descrip
 
 - calibrated 3D/7D/30D production probabilities before enough PIT observations exist;
 - HMM participation in prediction before regime ablation proves incremental OOS value;
-- ETH-native valuation/flow/structural dimensions until corresponding providers are configured;
+- ETH-native metrics not supplied by the public baseline (for example NUPL, exact CEX netflows, staking netflow, ETF flow) until a semantically matching provider is available;
 - self-developed ETH cost-basis/SOPR-like proxy before benchmark validation;
 - automatic candidate-model promotion (prohibited; human-reviewed PR is required).
 

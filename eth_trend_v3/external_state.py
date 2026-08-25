@@ -3,6 +3,9 @@ import os
 import time
 import requests
 
+COINMETRICS_COMMUNITY_URL = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+DEFILLAMA_ETH_STABLECOIN_URL = "https://stablecoins.llama.fi/stablecoincharts/Ethereum"
+
 DUNE_EXECUTE_URL = "https://api.dune.com/api/v1/sql/execute"
 DUNE_RESULT_URL = "https://api.dune.com/api/v1/execution/{execution_id}/results"
 
@@ -80,6 +83,132 @@ def _safe_http_error(resp: requests.Response, prefix: str) -> dict:
         "http_status": resp.status_code,
         "message": message[:300],
     }
+
+
+def _float(value):
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _merge_dimension(base: dict, enrichment: dict, provider_name: str) -> dict:
+    """Merge non-metadata metrics while preserving provenance and optional provider errors."""
+    out = dict(base or {})
+    enrichment = enrichment or {}
+    err = enrichment.get("_error")
+    if err:
+        provider_errors = dict(out.get("_provider_errors") or {})
+        provider_errors[provider_name] = {
+            "error": err,
+            "http_status": enrichment.get("http_status"),
+            "message": enrichment.get("message"),
+        }
+        out["_provider_errors"] = provider_errors
+        if not any(not str(key).startswith("_") for key in out):
+            out["_error"] = err
+        return out
+
+    for key, value in enrichment.items():
+        if str(key).startswith("_"):
+            continue
+        if value is not None:
+            out[key] = value
+    sources = [x for x in (out.get("_source"), enrichment.get("_source")) if x]
+    if sources:
+        out["_source"] = " + ".join(dict.fromkeys(sources))
+    observed = [x for x in (out.get("_observed_at"), enrichment.get("_observed_at")) if x]
+    if observed:
+        out["_observed_at"] = max(observed)
+    out.pop("_error", None)
+    return out
+
+
+def _coinmetrics_community_state() -> dict:
+    """Free daily ETH valuation/supply metrics; no API key required."""
+    try:
+        response = requests.get(
+            COINMETRICS_COMMUNITY_URL,
+            params={
+                "assets": "eth",
+                "metrics": "CapMVRVCur,SplyExNtv,SplyCur",
+                "frequency": "1d",
+                "page_size": 3,
+                "paging_from": "end",
+            },
+            timeout=20,
+        )
+        if not response.ok:
+            err = _safe_http_error(response, "COINMETRICS_HTTP_ERROR")
+            return {"valuation": dict(err), "structural": dict(err)}
+        rows = response.json().get("data") or []
+        if not rows:
+            err = {"_error": "COINMETRICS_EMPTY_RESULT", "_source": "Coin Metrics Community"}
+            return {"valuation": dict(err), "structural": dict(err)}
+        rows = sorted(rows, key=lambda row: str(row.get("time") or ""))
+        latest = rows[-1]
+        previous = rows[-2] if len(rows) >= 2 else {}
+        observed_at = latest.get("time")
+
+        valuation = {
+            "mvrv": _float(latest.get("CapMVRVCur")),
+            "_source": "Coin Metrics Community: CapMVRVCur",
+            "_observed_at": observed_at,
+        }
+        valuation = {k: v for k, v in valuation.items() if v is not None}
+
+        supply_now = _float(latest.get("SplyCur"))
+        supply_prev = _float(previous.get("SplyCur"))
+        exchange_now = _float(latest.get("SplyExNtv"))
+        exchange_prev = _float(previous.get("SplyExNtv"))
+        structural = {
+            "net_issuance_eth": supply_now - supply_prev if supply_now is not None and supply_prev is not None else None,
+            "exchange_balance_change_pct": (
+                (exchange_now / exchange_prev - 1.0) * 100.0
+                if exchange_now is not None and exchange_prev not in (None, 0)
+                else None
+            ),
+            "exchange_balance_eth": exchange_now,
+            "_source": "Coin Metrics Community: SplyCur + SplyExNtv",
+            "_observed_at": observed_at,
+        }
+        structural = {k: v for k, v in structural.items() if v is not None}
+        return {"valuation": valuation, "structural": structural}
+    except requests.RequestException as exc:
+        err = {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "Coin Metrics Community"}
+        return {"valuation": dict(err), "structural": dict(err)}
+    except Exception as exc:
+        err = {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "Coin Metrics Community"}
+        return {"valuation": dict(err), "structural": dict(err)}
+
+
+def _defillama_stablecoin_state() -> dict:
+    """Free Ethereum stablecoin supply change; semantically distinct from CEX stablecoin flow."""
+    try:
+        response = requests.get(DEFILLAMA_ETH_STABLECOIN_URL, timeout=20)
+        if not response.ok:
+            return {"capital_flow": _safe_http_error(response, "DEFILLAMA_STABLECOIN_HTTP_ERROR")}
+        rows = response.json()
+        if not isinstance(rows, list) or len(rows) < 2:
+            return {"capital_flow": {"_error": "DEFILLAMA_STABLECOIN_EMPTY_RESULT", "_source": "DefiLlama"}}
+        latest, previous = rows[-1], rows[-2]
+        current = _float(((latest.get("totalCirculatingUSD") or {}).get("peggedUSD")))
+        prior = _float(((previous.get("totalCirculatingUSD") or {}).get("peggedUSD")))
+        if current is None or prior is None:
+            return {"capital_flow": {"_error": "DEFILLAMA_STABLECOIN_VALUE_MISSING", "_source": "DefiLlama"}}
+        return {
+            "capital_flow": {
+                "stablecoin_supply_change_usd": current - prior,
+                "stablecoin_supply_change_pct": ((current / prior) - 1.0) * 100.0 if prior else None,
+                "stablecoin_supply_usd": current,
+                "_source": "DefiLlama Ethereum stablecoin circulating supply",
+                "_observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(latest.get("date")))),
+            }
+        }
+    except requests.RequestException as exc:
+        return {"capital_flow": {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "DefiLlama"}}
+    except Exception as exc:
+        return {"capital_flow": {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "DefiLlama"}}
 
 
 def _dune_execute(sql: str, timeout_seconds: int = 50) -> dict:
@@ -185,22 +314,38 @@ def _dune_external_state() -> dict:
 
 
 def collect_external_state() -> dict:
-    """Collect ETH-native state.
+    """Collect ETH-native state with explicit adapters > free baseline > optional Dune enrichment.
 
-    Explicit ETH_* adapter URLs take precedence for backward compatibility.
-    If none are configured and DUNE_API_KEY exists, use Dune curated tables.
-    Missing metrics stay missing; no zero-value imputation is performed.
+    Public baseline providers require no credentials:
+    - Coin Metrics Community: MVRV, current supply, exchange-held supply.
+    - DefiLlama: Ethereum stablecoin circulating-supply change.
+
+    Dune remains optional enrichment for CEX/staking flow semantics. A Dune failure is
+    retained as provider diagnostics but does not poison a dimension when an independent
+    public metric is available. Missing metrics stay missing; no zero-value imputation.
     """
-    explicit = any(
-        os.getenv(name)
-        for name in ("ETH_VALUATION_API_URL", "ETH_FLOW_API_URL", "ETH_STRUCTURAL_API_URL")
-    )
-    if explicit:
-        return {
-            "valuation": _fetch_json("ETH_VALUATION_API_URL", "ETH_VALUATION_API_TOKEN"),
-            "capital_flow": _fetch_json("ETH_FLOW_API_URL", "ETH_FLOW_API_TOKEN"),
-            "structural": _fetch_json("ETH_STRUCTURAL_API_URL", "ETH_STRUCTURAL_API_TOKEN"),
-        }
+    cm = _coinmetrics_community_state()
+    llama = _defillama_stablecoin_state()
+    result = {
+        "valuation": dict(cm.get("valuation") or {}),
+        "capital_flow": dict(llama.get("capital_flow") or {}),
+        "structural": dict(cm.get("structural") or {}),
+    }
+
     if os.getenv("DUNE_API_KEY"):
-        return _dune_external_state()
-    return {"valuation": {}, "capital_flow": {}, "structural": {}}
+        dune = _dune_external_state()
+        result["capital_flow"] = _merge_dimension(result["capital_flow"], dune.get("capital_flow") or {}, "dune")
+        result["structural"] = _merge_dimension(result["structural"], dune.get("structural") or {}, "dune")
+
+    explicit = {
+        "valuation": ("ETH_VALUATION_API_URL", "ETH_VALUATION_API_TOKEN"),
+        "capital_flow": ("ETH_FLOW_API_URL", "ETH_FLOW_API_TOKEN"),
+        "structural": ("ETH_STRUCTURAL_API_URL", "ETH_STRUCTURAL_API_TOKEN"),
+    }
+    for dimension, (url_env, token_env) in explicit.items():
+        if os.getenv(url_env):
+            payload = _fetch_json(url_env, token_env)
+            if payload and not payload.get("_source"):
+                payload["_source"] = f"explicit adapter: {url_env}"
+            result[dimension] = payload
+    return result

@@ -12,4 +12,10 @@ class TestDataHealth(unittest.TestCase):
         self.assertEqual(h['status'],'DEGRADED')
         self.assertIn('candles',h['stale_sources'])
 
+    def test_optional_provider_warning_does_not_degrade_available_dimension(self):
+        raw={'capital_flow':{'stablecoin_supply_change_usd':1.0,'_provider_errors':{'dune':{'error':'DUNE_EXECUTE_HTTP_ERROR'}}}}
+        h=assess(raw,80)
+        self.assertEqual(h['status'],'NORMAL')
+        self.assertIn('capital_flow:dune:DUNE_EXECUTE_HTTP_ERROR',h['provider_warnings'])
+
 if __name__=='__main__': unittest.main()

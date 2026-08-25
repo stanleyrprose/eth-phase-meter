@@ -27,6 +27,7 @@ def assess(raw: dict, factor_coverage: float) -> dict:
     meta = raw.get("_meta") or {}
     stale = []
     errors = []
+    provider_warnings = []
     status_by = {}
     now = datetime.now(timezone.utc)
 
@@ -44,11 +45,16 @@ def assess(raw: dict, factor_coverage: float) -> dict:
         present = _present(value)
         is_stale = bool(age is not None and age > MAX_AGE[src])
         err = value.get("_error") if isinstance(value, dict) else None
+        provider_errors = value.get("_provider_errors") if isinstance(value, dict) else None
 
         if is_stale:
             stale.append(src)
         if err:
             errors.append(f"{src}:{err}")
+        if isinstance(provider_errors, dict):
+            for provider, detail in provider_errors.items():
+                code = detail.get("error") if isinstance(detail, dict) else detail
+                provider_warnings.append(f"{src}:{provider}:{code}")
         status_by[src] = {
             "present": present,
             "age_seconds": age,
@@ -68,5 +74,6 @@ def assess(raw: dict, factor_coverage: float) -> dict:
         "coverage": factor_coverage,
         "stale_sources": stale,
         "errors": errors,
+        "provider_warnings": provider_warnings,
         "sources": status_by,
     }

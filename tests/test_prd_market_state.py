@@ -11,4 +11,11 @@ class TestMarketState(unittest.TestCase):
         self.assertIsNone(state['dimensions']['structural_supply']['score'])
         self.assertEqual(state['dimensions']['trend']['score'],50)
 
+    def test_stablecoin_supply_change_is_separate_capital_flow_component(self):
+        r=SimpleNamespace(quality={'families':{'Technical':{'nominal':40,'active':40,'coverage':100,'contribution':20}}},crowding=50,volatility=30)
+        state=build_market_state({'valuation':{},'capital_flow':{'stablecoin_supply_change_usd':500_000_000},'structural':{}},r)
+        flow=state['dimensions']['capital_flow']
+        self.assertEqual(flow['score'],100)
+        self.assertEqual(flow['coverage'],25)
+
 if __name__=='__main__': unittest.main()

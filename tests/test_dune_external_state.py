@@ -20,32 +20,63 @@ class TestDuneExternalState(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self.old)
 
-    def test_missing_dune_key_keeps_metrics_missing(self):
+    @patch("eth_trend_v3.external_state._defillama_stablecoin_state")
+    @patch("eth_trend_v3.external_state._coinmetrics_community_state")
+    def test_public_baseline_works_without_dune_key(self, coinmetrics, defillama):
+        coinmetrics.return_value = {
+            "valuation": {"mvrv": 1.2, "_source": "Coin Metrics Community"},
+            "structural": {"net_issuance_eth": 2800.0, "exchange_balance_change_pct": -0.2},
+        }
+        defillama.return_value = {
+            "capital_flow": {"stablecoin_supply_change_usd": 125000000.0, "_source": "DefiLlama"}
+        }
         r = external_state.collect_external_state()
-        self.assertEqual(r, {"valuation": {}, "capital_flow": {}, "structural": {}})
+        self.assertEqual(r["valuation"]["mvrv"], 1.2)
+        self.assertEqual(r["capital_flow"]["stablecoin_supply_change_usd"], 125000000.0)
+        self.assertEqual(r["structural"]["net_issuance_eth"], 2800.0)
 
+    @patch("eth_trend_v3.external_state._defillama_stablecoin_state")
+    @patch("eth_trend_v3.external_state._coinmetrics_community_state")
     @patch("eth_trend_v3.external_state._dune_execute")
-    def test_dune_maps_curated_metrics_without_fabricating_valuation(self, execute):
+    def test_dune_enriches_public_baseline_without_overwriting_semantics(self, execute, coinmetrics, defillama):
         os.environ["DUNE_API_KEY"] = "test-only"
+        coinmetrics.return_value = {
+            "valuation": {"mvrv": 1.2},
+            "structural": {"net_issuance_eth": 2800.0},
+        }
+        defillama.return_value = {
+            "capital_flow": {"stablecoin_supply_change_usd": 125000000.0}
+        }
         execute.return_value = {
             "exchange_netflow_eth": -12000.0,
             "stablecoin_flow_usd": 250000000.0,
             "staking_netflow_eth": 18000.0,
         }
         r = external_state.collect_external_state()
-        self.assertEqual(r["valuation"], {})
-        self.assertEqual(r["capital_flow"]["exchange_netflow_eth"], -12000.0)
+        self.assertEqual(r["capital_flow"]["stablecoin_supply_change_usd"], 125000000.0)
         self.assertEqual(r["capital_flow"]["stablecoin_flow_usd"], 250000000.0)
+        self.assertEqual(r["capital_flow"]["exchange_netflow_eth"], -12000.0)
         self.assertEqual(r["structural"]["staking_netflow_eth"], 18000.0)
+        self.assertEqual(r["valuation"]["mvrv"], 1.2)
 
+    @patch("eth_trend_v3.external_state._defillama_stablecoin_state")
+    @patch("eth_trend_v3.external_state._coinmetrics_community_state")
     @patch("eth_trend_v3.external_state._dune_execute")
-    def test_dune_failure_is_error_not_zero(self, execute):
+    def test_dune_failure_is_optional_when_public_metrics_exist(self, execute, coinmetrics, defillama):
         os.environ["DUNE_API_KEY"] = "test-only"
-        execute.return_value = {"_error": "DUNE_QUERY_FAILED", "message": "bad query"}
+        coinmetrics.return_value = {
+            "valuation": {"mvrv": 1.2},
+            "structural": {"net_issuance_eth": 2800.0},
+        }
+        defillama.return_value = {
+            "capital_flow": {"stablecoin_supply_change_usd": 125000000.0}
+        }
+        execute.return_value = {"_error": "DUNE_QUERY_FAILED", "message": "paid tier required"}
         r = external_state.collect_external_state()
-        self.assertEqual(r["capital_flow"]["_error"], "DUNE_QUERY_FAILED")
-        self.assertNotIn("exchange_netflow_eth", r["capital_flow"])
-        self.assertEqual(r["structural"]["_error"], "DUNE_QUERY_FAILED")
+        self.assertNotIn("_error", r["capital_flow"])
+        self.assertNotIn("_error", r["structural"])
+        self.assertEqual(r["capital_flow"]["_provider_errors"]["dune"]["error"], "DUNE_QUERY_FAILED")
+        self.assertEqual(r["structural"]["_provider_errors"]["dune"]["error"], "DUNE_QUERY_FAILED")
 
 
 if __name__ == "__main__":
