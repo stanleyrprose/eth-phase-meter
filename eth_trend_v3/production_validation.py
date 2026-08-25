@@ -85,6 +85,7 @@ def validate_production_summary(
     now: datetime | None = None,
     max_age_hours: float = 8.0,
     notification_configured: bool | None = None,
+    notification_status: Mapping[str, Any] | None = None,
 ) -> dict:
     """Validate the post-run production contract while allowing explicit fail-closed output."""
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -173,6 +174,10 @@ def validate_production_summary(
 
     if notification_configured is False:
         warnings.append("TELEGRAM_NOT_CONFIGURED")
+    elif notification_configured is True:
+        status = (notification_status or {}).get("status") if isinstance(notification_status, Mapping) else None
+        if status != "SENT":
+            errors.append("TELEGRAM_NOTIFICATION_NOT_CONFIRMED")
 
     return {
         "ok": not errors,
@@ -182,5 +187,6 @@ def validate_production_summary(
         "age_hours": age_hours,
         "data_health": health_status,
         "notification_configured": notification_configured,
+        "notification_status": dict(notification_status) if isinstance(notification_status, Mapping) else None,
         "horizons": horizon_reports,
     }

@@ -23,10 +23,14 @@ def _load_summary() -> tuple[dict, str]:
 
 def main() -> None:
     summary, source = _load_summary()
+    notification_configured = bool(os.getenv("TG_BOT_TOKEN") and os.getenv("TG_CHAT_ID"))
+    primary = summary.get("4h") if isinstance(summary, dict) else None
+    notification_status = primary.get("notification") if isinstance(primary, dict) else None
     report = validate_production_summary(
         summary,
         now=datetime.now(timezone.utc),
-        notification_configured=bool(os.getenv("TG_BOT_TOKEN") and os.getenv("TG_CHAT_ID")),
+        notification_configured=notification_configured,
+        notification_status=notification_status,
     )
     report["source"] = source
     target = Path("eth_reports/forecast-research/production_validation.json")

@@ -196,8 +196,10 @@ def run_one(timeframe, history_records):
 
     print(telegram_text(result))
     print(f"PIT persistence: {persistence_mode()} | external_persisted={persisted}")
-    if core.TG_BOT_TOKEN and core.TG_CHAT_ID and timeframe == "4h":
-        core.send_tg_message(prd_summary(payload))
+    if timeframe == "4h":
+        payload["notification"] = core.send_tg_message(prd_summary(payload))
+        persist_json_record(f"monitor_state_{timeframe}", payload)
+        (OUTPUT / f"v3_snapshot_{timeframe}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return result, payload
 
 
@@ -244,8 +246,12 @@ def main():
 
     gate = f"🚦 Execution Gate: <b>{r1.execution_gate}</b> | {r1.execution_reason}"
     print(gate)
-    if core.TG_BOT_TOKEN and core.TG_CHAT_ID:
-        core.send_tg_message(gate)
+    gate_notification = core.send_tg_message(gate)
+    summary["notification"] = {
+        "forecast_summary": p4.get("notification"),
+        "execution_gate": gate_notification,
+    }
+    (OUTPUT / "latest_monitor.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return summary
 
 
