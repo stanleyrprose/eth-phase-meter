@@ -90,11 +90,16 @@ def pit_history_depth(records:list[dict], timeframe:str="4h") -> dict:
     bar_hours=4 if timeframe=="4h" else 1
     for horizon,hours in HORIZONS.items():
         horizon_bars=max(1,int(hours/bar_hours))
+        span_complete_windows=int(span_hours//hours)
+        count_complete_windows=raw_n//horizon_bars
         per_horizon[horizon]={
             "horizon_hours":hours,
             "raw_pit_n":raw_n,
-            "conservative_nonoverlap_n":raw_n//horizon_bars,
-            "span_complete_windows":int(span_hours//hours),
+            # Manual/retry runs can create multiple records inside one scheduled 4h interval.
+            # Never let record density manufacture observation depth: both record count and elapsed span must support it.
+            "conservative_nonoverlap_n":min(count_complete_windows, span_complete_windows),
+            "count_complete_windows":count_complete_windows,
+            "span_complete_windows":span_complete_windows,
             "effective_evidence_confirmed":False,
             "kind":"DIAGNOSTIC",
         }
