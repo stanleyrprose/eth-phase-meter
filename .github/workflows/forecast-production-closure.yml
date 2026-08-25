@@ -1,0 +1,28 @@
+name: Forecast Production Closure
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'eth_trend_v3/production_validation.py'
+      - 'scripts/validate_production_run.py'
+      - 'tests/test_forecast_production_closure.py'
+      - '.github/workflows/forecast-production-closure.yml'
+      - '.github/workflows/scheduled-monitor.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  targeted-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install pytest
+      - run: python -m pytest -q tests/test_forecast_production_closure.py
