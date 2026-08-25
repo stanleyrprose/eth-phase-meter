@@ -1,0 +1,29 @@
+name: Forecast Research Milestones 2-9 Validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'eth_trend_v3/dynamic_baseline.py'
+      - 'eth_trend_v3/horizon_features.py'
+      - 'eth_trend_v3/probabilistic_research.py'
+      - 'eth_trend_v3/feature_ablation_research.py'
+      - 'eth_trend_v3/regime_conditioning.py'
+      - 'eth_trend_v3/calibration_research_v2.py'
+      - 'eth_trend_v3/shadow_forecast.py'
+      - 'eth_trend_v3/promotion.py'
+      - 'tests/test_forecast_research_m2_m9.py'
+
+jobs:
+  validate-research-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install pytest
+      - run: python -m pytest -q tests/test_research_foundation.py tests/test_forecast_research_m2_m9.py
