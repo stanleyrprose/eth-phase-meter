@@ -86,6 +86,7 @@ def test_registry_full_contract_and_promotion_fields_are_enforced():
 
 
 def test_gate_version_is_immutable_and_holdout_contamination_is_persistent(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.chdir(tmp_path)
     first = register_gate_version("gate-v1", {"min_bss": 0.01})
     assert register_gate_version("gate-v1", {"min_bss": 0.01})["gate_hash"] == first["gate_hash"]
@@ -151,6 +152,7 @@ def test_frozen_model_artifact_hash_and_inference_contract_are_enforced():
 
 
 def test_model_state_cannot_initialize_directly_as_shadow(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError):
         initialize_model_state(
