@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,7 +18,7 @@ def build_system_status() -> dict:
     monitor = load_latest_record("monitor_state_4h") or {}
     forecasts = monitor.get("forecasts") or {}
     shadows = load_shadow_records()
-    pit_depth = pit_history_depth(load_pit_records())
+    pit_depth = pit_history_depth(load_pit_records(os.getenv("DATABASE_URL")))
     horizons = {}
     production_active = False
     for horizon in HORIZONS:
