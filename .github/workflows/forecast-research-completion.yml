@@ -2,6 +2,13 @@ name: Forecast Research Completion Validation
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'eth_trend_v3/**'
+      - 'scripts/validate_forecast_research_plan.py'
+      - 'tests/test_forecast_research_completion.py'
+      - '.github/workflows/forecast-research-completion.yml'
   pull_request:
     paths:
       - 'eth_trend_v3/dynamic_baseline.py'
@@ -11,6 +18,8 @@ on:
       - 'eth_trend_v3/calibration_research_v2.py'
       - 'eth_trend_v3/shadow_forecast.py'
       - 'eth_trend_v3/promotion.py'
+      - 'eth_trend_v3/runner.py'
+      - 'scripts/validate_forecast_research_plan.py'
       - 'tests/test_forecast_research_completion.py'
       - '.github/workflows/forecast-research-completion.yml'
 
@@ -27,3 +36,9 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: python -m pip install pytest
       - run: python -m pytest -q tests/test_research_foundation.py tests/test_forecast_research_m2_m9.py tests/test_forecast_research_completion.py
+      - name: Generate M1-M9 implementation evidence
+        run: python -m scripts.validate_forecast_research_plan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forecast-research-implementation-evidence
+          path: eth_reports/forecast-research/implementation_evidence.json
