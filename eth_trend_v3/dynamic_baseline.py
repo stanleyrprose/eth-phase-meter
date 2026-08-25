@@ -13,6 +13,7 @@ from .research_metrics import (
     calibration_error,
     log_loss,
     moving_block_delta_brier_ci,
+    moving_block_sensitivity,
 )
 
 
@@ -50,11 +51,7 @@ def _global_probability(y: np.ndarray) -> float:
     return float(np.clip(float(y.mean()), 1e-6, 1 - 1e-6))
 
 
-def _regime_probabilities(
-    train: Sequence[Mapping[str, Any]],
-    test: Sequence[Mapping[str, Any]],
-    spec: BaselineSpec,
-) -> np.ndarray:
+def _regime_probabilities(train: Sequence[Mapping[str, Any]], test: Sequence[Mapping[str, Any]], spec: BaselineSpec) -> np.ndarray:
     y = _targets(train)
     global_p = _global_probability(y)
     train_regimes = [r.get(spec.regime_key) for r in train]
@@ -76,17 +73,12 @@ def _regime_probabilities(
     return np.asarray(out, dtype=float)
 
 
-def predict_baseline(
-    train: Sequence[Mapping[str, Any]],
-    test: Sequence[Mapping[str, Any]],
-    spec: BaselineSpec,
-) -> np.ndarray:
+def predict_baseline(train: Sequence[Mapping[str, Any]], test: Sequence[Mapping[str, Any]], spec: BaselineSpec) -> np.ndarray:
     if not train:
         raise ValueError("baseline requires training observations")
     y = _targets(train)
     times = _times(train)
     p = _global_probability(y)
-
     if spec.name == "expanding":
         pass
     elif spec.name == "rolling":
@@ -106,7 +98,6 @@ def predict_baseline(
         return _regime_probabilities(train, test, spec)
     else:
         raise ValueError(f"unsupported baseline: {spec.name}")
-
     return np.full(len(test), p, dtype=float)
 
 
@@ -122,7 +113,6 @@ def default_specs(include_regime: bool = True):
 def evaluate_baselines(folds, specs=None, *, horizon_bars: int, bootstrap_reps: int = 500) -> dict:
     specs = specs or default_specs()
     store = {s.key: {"p": [], "y": [], "fold_brier": [], "spec": s} for s in specs}
-
     for fold in folds:
         train, test = fold["train"], fold["test"]
         y = _targets(test)
@@ -132,7 +122,6 @@ def evaluate_baselines(folds, specs=None, *, horizon_bars: int, bootstrap_reps: 
             bucket["p"].extend(p.tolist())
             bucket["y"].extend(y.tolist())
             bucket["fold_brier"].append(brier(y, p))
-
     if not any(v["y"] for v in store.values()):
         return {"available": False, "reason": "NO_VALID_FOLDS"}
 
@@ -142,11 +131,8 @@ def evaluate_baselines(folds, specs=None, *, horizon_bars: int, bootstrap_reps: 
     for key, bucket in store.items():
         y = np.asarray(bucket["y"])
         p = np.asarray(bucket["p"])
-        ci = (
-            moving_block_delta_brier_ci(y, p, base_p, horizon_bars, reps=bootstrap_reps)
-            if len(y) == len(base_y)
-            else None
-        )
+        ci = moving_block_delta_brier_ci(y, p, base_p, horizon_bars, reps=bootstrap_reps) if len(y) == len(base_y) else None
+        sensitivity = moving_block_sensitivity(y, p, base_p, horizon_bars, reps=bootstrap_reps) if len(y) == len(base_y) else None
         metrics[key] = {
             "brier": brier(y, p),
             "brier_skill_vs_expanding": brier_skill_score(y, p, base_p),
@@ -154,16 +140,16 @@ def evaluate_baselines(folds, specs=None, *, horizon_bars: int, bootstrap_reps: 
             "calibration_error": calibration_error(y, p),
             "fold_brier": bucket["fold_brier"],
             "delta_brier_ci_vs_expanding": ci,
+            "block_sensitivity_vs_expanding": sensitivity,
             "oos_n": len(y),
         }
 
     ranking = sorted(metrics, key=lambda k: (metrics[k]["brier"], 0 if k == "expanding" else 1))
     raw_winner = ranking[0]
     raw_metrics = metrics[raw_winner]
-    ci = raw_metrics.get("delta_brier_ci_vs_expanding")
-    statistically_clear = raw_winner == "expanding" or bool(ci and ci.get("low", 0) > 0)
+    sensitivity = raw_metrics.get("block_sensitivity_vs_expanding") or {}
+    statistically_clear = raw_winner == "expanding" or bool(sensitivity.get("stable_positive"))
     winner = raw_winner if statistically_clear else "expanding"
-
     return {
         "available": True,
         "winner": winner,
@@ -171,7 +157,7 @@ def evaluate_baselines(folds, specs=None, *, horizon_bars: int, bootstrap_reps: 
         "ranking": ranking,
         "metrics": metrics,
         "selection_rule": (
-            "Use lowest Brier only when its moving-block CI supports improvement over expanding; "
+            "Use the lowest-Brier candidate only when moving-block sensitivity is positive at 0.5H/1.0H/1.5H; "
             "otherwise prefer expanding as the simpler baseline."
         ),
     }
