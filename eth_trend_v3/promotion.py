@@ -1,30 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import os
 from typing import Any, Mapping
 
 from .experiment_registry import stable_hash
 from .persistence import load_latest_record, persist_json_record
 
-UNAVAILABLE_REASONS = {
-    "NO_MODEL_BEATS_BASELINE",
-    "INSUFFICIENT_DATA",
-    "INSUFFICIENT_EFFECTIVE_SAMPLE",
-    "CALIBRATION_FAILED",
-    "DATA_HEALTH_CRITICAL",
-    "MODEL_DEGRADED",
-    "MODEL_ARTIFACT_MISSING",
-    "FEATURE_UNAVAILABLE",
-    "SOURCE_CONTRACT_FAILED",
-    "SHADOW_INSUFFICIENT",
-    "REGISTRY_INCOMPLETE",
-    "LEAKAGE_DETECTED",
-    "TRAIN_SERVE_SKEW",
-    "HOLDOUT_CONTAMINATED",
-    "NO_PRODUCTION_APPROVAL",
-    "MODEL_VERSION_MISMATCH",
-    "MODEL_ARTIFACT_MISMATCH",
-}
+from .reason_codes import UNAVAILABLE_REASONS
+from .experiment_registry import load_experiment, validate_experiment
+from .governance import publication_allowed, record_override, register_gate_version
+from .model_artifact import load_model_artifact
+from .model_state import current_model_state, persist_model_state, transition_model
+
 
 
 @dataclass(frozen=True)
@@ -68,7 +56,8 @@ def promotion_gate(
         "train_serve_parity": "TRAIN_SERVE_SKEW",
         "shadow_complete": "SHADOW_INSUFFICIENT",
         "data_health_normal": "DATA_HEALTH_CRITICAL",
-        "emergency_freeze_clear": "DATA_HEALTH_CRITICAL",
+        "emergency_freeze_clear": "EMERGENCY_FREEZE",
+        "holdout_clean": "HOLDOUT_CONTAMINATED",
     }
     for key, reason in hard.items():
         if not bool(evidence.get(key)):
@@ -136,28 +125,28 @@ def demotion_decision(
     }
 
 
-def emergency_override(action: str, *, operator: str, reason: str) -> dict:
-    allowed = {"FREEZE", "DEMOTE", "DISABLE_PUBLICATION", "ANNOTATE"}
-    if action not in allowed:
+def emergency_override(action: str, *, operator: str, reason: str, horizon: str = "ALL") -> dict:
+    if action.upper() == "PROMOTE":
         raise ValueError("manual override cannot promote a model")
-    if not operator or not reason:
-        raise ValueError("operator and reason required")
-    from datetime import datetime, timezone
-
-    return {
-        "action": action,
-        "operator": operator,
-        "reason": reason,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "non_standard_flow": True,
-    }
+    event = record_override(action, operator=operator, reason=reason, horizon=horizon)
+    event["non_standard_flow"] = True
+    if action.upper() == "DEMOTE" and horizon != "ALL":
+        state = current_model_state(horizon)
+        if state and state.get("status") == "PRODUCTION":
+            transition_model(
+                horizon, "DEGRADED", reason=reason, trigger="emergency_override",
+                operator_or_system=operator, gate_version=str(state.get("gate_version") or "v1"),
+                patch={"demotion_reasons": ["EMERGENCY_OVERRIDE"]},
+            )
+    return event
 
 
 def current_production_approval(horizon: str) -> dict | None:
-    record = load_latest_record(f"forecast_model_state_{horizon}")
+    record = current_model_state(horizon) or load_latest_record(f"forecast_model_state_{horizon}")
     if not record or record.get("status") != "PRODUCTION":
         return None
-    return record
+    allowed, _ = publication_allowed(horizon)
+    return record if allowed else None
 
 
 def record_promotion(
@@ -171,36 +160,77 @@ def record_promotion(
     gate: GateConfig | None = None,
 ) -> dict:
     gate = gate or GateConfig()
+    state = current_model_state(horizon)
+    if not state or state.get("status") != "SHADOW":
+        raise ValueError("production promotion requires current SHADOW state")
+    if state.get("model_id") != model_id or state.get("model_version") != model_version or state.get("artifact_hash") != artifact_hash:
+        raise ValueError("shadow state/model artifact mismatch")
+    artifact = load_model_artifact(artifact_hash)
+    if not artifact or artifact.get("model_id") != model_id or artifact.get("model_version") != model_version:
+        raise ValueError("model artifact missing or mismatched")
+    experiment = load_experiment(experiment_id)
+    if not experiment:
+        raise ValueError("experiment registry record missing")
+    validate_experiment(experiment, for_promotion=True)
+    if experiment.get("model_artifact_hash") != artifact_hash:
+        raise ValueError("experiment/model artifact mismatch")
+    register_gate_version(gate.version, asdict(gate))
+    allowed, reason = publication_allowed(horizon)
+    if not allowed:
+        raise ValueError(reason or "publication blocked")
     decision = promotion_gate(evidence, gate=gate)
     if not decision.eligible:
         raise ValueError("promotion gate failed: " + ",".join(decision.reasons))
     record = {
+        **dict(state),
         "horizon": horizon,
         "status": "PRODUCTION",
         "model_id": model_id,
         "model_version": model_version,
         "artifact_hash": artifact_hash,
+        "inference_contract_hash": artifact.get("inference_contract_hash"),
         "experiment_id": experiment_id,
+        "dataset_hash": artifact.get("dataset_hash"),
+        "config_hash": artifact.get("config_hash"),
         "gate_version": decision.gate_version,
         "gate_hash": decision.gate_hash,
         "evidence_hash": stable_hash(dict(evidence)),
         "evidence": dict(evidence),
     }
-    persisted = persist_json_record(f"forecast_model_state_{horizon}", record)
-    record["externally_persisted"] = bool(persisted)
-    return record
+    promoted = transition_model(
+        horizon, "PRODUCTION", reason="promotion gate + human review", trigger="manual_review",
+        operator_or_system="reviewer", gate_version=decision.gate_version, patch=record,
+    )
+    persist_json_record(f"forecast_model_state_{horizon}", promoted)
+    promoted["externally_persisted"] = bool(os.getenv("DATABASE_URL"))
+    return promoted
 
 
 def record_demotion(horizon: str, *, approval: Mapping[str, Any], reasons: list[str]) -> dict:
-    record = dict(approval)
-    record["status"] = "DEGRADED"
-    record["demotion_reasons"] = list(reasons)
-    record["externally_persisted"] = bool(persist_json_record(f"forecast_model_state_{horizon}", record))
+    state = current_model_state(horizon)
+    if state and state.get("status") == "PRODUCTION":
+        record = transition_model(
+            horizon, "DEGRADED", reason=",".join(reasons) or "automatic demotion",
+            trigger="automatic_demotion", operator_or_system="system",
+            gate_version=str(state.get("gate_version") or "v1"), patch={"demotion_reasons": list(reasons)},
+        )
+    else:
+        record = dict(approval)
+        record["status"] = "DEGRADED"
+        record["demotion_reasons"] = list(reasons)
+        persist_model_state(record)
+    persist_json_record(f"forecast_model_state_{horizon}", record)
+    record["externally_persisted"] = bool(os.getenv("DATABASE_URL"))
     return record
 
 
-def publication_gate(forecast: Mapping[str, Any], approval: Mapping[str, Any] | None) -> dict:
+def publication_gate(forecast: Mapping[str, Any], approval: Mapping[str, Any] | None, *, horizon: str | None = None) -> dict:
     out = dict(forecast)
+    if horizon:
+        allowed, control_reason = publication_allowed(horizon)
+        if not allowed:
+            out.update({"probability_up": None, "state": "UNAVAILABLE", "status": "UNAVAILABLE", "reliability": "UNAVAILABLE", "reason": control_reason})
+            return out
     if not approval or approval.get("status") != "PRODUCTION":
         out.update(
             {
@@ -238,6 +268,12 @@ def publication_gate(forecast: Mapping[str, Any], approval: Mapping[str, Any] | 
                 "reason": "MODEL_ARTIFACT_MISMATCH",
             }
         )
+        return out
+
+    expected_contract = approval.get("inference_contract_hash")
+    current_contract = out.get("inference_contract_hash")
+    if expected_contract and current_contract != expected_contract:
+        out.update({"probability_up": None, "state": "UNAVAILABLE", "status": "UNAVAILABLE", "reliability": "UNAVAILABLE", "reason": "TRAIN_SERVE_SKEW"})
         return out
 
     out["production_approval"] = {

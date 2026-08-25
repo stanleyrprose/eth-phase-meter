@@ -1,0 +1,58 @@
+name: Forecast Emergency Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'FREEZE, DEMOTE, DISABLE_PUBLICATION, ANNOTATE, or CLEAR'
+        required: true
+        type: choice
+        options: [FREEZE, DEMOTE, DISABLE_PUBLICATION, ANNOTATE, CLEAR]
+      horizon:
+        description: 'Target horizon'
+        required: true
+        default: ALL
+        type: choice
+        options: [ALL, 3d, 7d, 30d]
+      reason:
+        description: 'Required audit reason'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.lock
+      - name: Require durable persistence
+        run: |
+          if [[ -z "$DATABASE_URL" ]]; then
+            echo 'ERROR: Emergency Control requires durable DATABASE_URL.'
+            exit 1
+          fi
+      - run: python -m scripts.apply_migrations
+      - name: Apply audited control
+        run: >-
+          python -m scripts.emergency_control
+          --action '${{ inputs.action }}'
+          --horizon '${{ inputs.horizon }}'
+          --operator '${{ github.actor }}'
+          --reason '${{ inputs.reason }}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emergency-control-${{ github.run_number }}
+          path: eth_reports/governance/
+          if-no-files-found: warn
+          retention-days: 90

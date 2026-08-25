@@ -11,8 +11,10 @@ from typing import Any, Sequence
 from uuid import uuid4
 
 
-def dependency_hash(requirements_path: str = "requirements.txt") -> str:
+def dependency_hash(requirements_path: str = "requirements.lock") -> str:
     path = Path(requirements_path)
+    if not path.exists() and requirements_path == "requirements.lock":
+        path = Path("requirements.txt")
     if not path.exists():
         return "MISSING"
     return hashlib.sha256(path.read_bytes()).hexdigest()
