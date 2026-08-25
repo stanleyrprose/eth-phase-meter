@@ -1,0 +1,38 @@
+name: Forecast Research Foundation Validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'eth_trend_v3/research_contract.py'
+      - 'eth_trend_v3/research_validation.py'
+      - 'eth_trend_v3/experiment_registry.py'
+      - 'eth_trend_v3/model_lifecycle.py'
+      - 'eth_trend_v3/run_manifest.py'
+      - 'tests/test_research_foundation.py'
+      - '.github/workflows/research-foundation.yml'
+
+jobs:
+  validate-foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: pip install pytest
+      - run: pytest -q tests/test_research_foundation.py
+      - name: Generate evidence manifest
+        run: |
+          python - <<'PY'
+          from eth_trend_v3.run_manifest import build_run_manifest, write_manifest
+          m=build_run_manifest(workflow_name='research-foundation', dataset_hash='TEST_FIXTURE', result='PASS')
+          write_manifest(m, 'eth_reports/research-foundation/run_manifest.json')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-foundation-evidence
+          path: eth_reports/research-foundation/run_manifest.json
