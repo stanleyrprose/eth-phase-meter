@@ -140,5 +140,8 @@ def test_versioned_promotion_gate_and_publication_fail_closed():
     assert not decision.eligible and "INSUFFICIENT_EFFECTIVE_SAMPLE" in decision.reasons
     closed = publication_gate({"probability_up": 0.62, "status": "CALIBRATED"}, None)
     assert closed["probability_up"] is None and closed["reason"] == "NO_PRODUCTION_APPROVAL"
+    approval = {"status": "PRODUCTION", "model_version": "v2", "artifact_hash": "abc"}
+    mismatched = publication_gate({"probability_up": 0.62, "model_version": None, "artifact_hash": None}, approval)
+    assert mismatched["probability_up"] is None and mismatched["reason"] == "MODEL_VERSION_MISMATCH"
     with pytest.raises(ValueError):
         emergency_override("PROMOTE", operator="admin", reason="not allowed")

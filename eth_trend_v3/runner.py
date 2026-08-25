@@ -24,6 +24,7 @@ from .drift import detect_feature_drift, assess_model_health
 from .anomaly import detect as detect_anomalies
 from .alerts import build_alerts
 from .dashboard import write_dashboard
+from .promotion import current_production_approval, publication_gate
 
 OUTPUT = Path(core.OUTPUT_DIR)
 
@@ -61,9 +62,7 @@ def _forecast_bundle(records, market_state, health, regime):
         if health.get("stale_sources"):
             prob = None
             reason = "STALE_DATA"
-        if prob is not None:
-            reliabilities.append(rel)
-        out[horizon] = {
+        legacy_forecast = {
             "probability_up": prob,
             "state": probability_state(prob),
             "status": "CALIBRATED" if prob is not None else "UNAVAILABLE",
@@ -72,7 +71,18 @@ def _forecast_bundle(records, market_state, health, regime):
             "metrics": metrics,
             "selected_model": wf.get("selected_model"),
             "reason": reason,
+            # The legacy on-the-fly fitting path deliberately has no immutable
+            # model_version/artifact_hash. publication_gate therefore keeps it
+            # UNAVAILABLE even if an unrelated production approval exists.
+            "model_version": None,
+            "artifact_hash": None,
+            "research_only_probability": prob,
         }
+        approval = current_production_approval(horizon)
+        gated = publication_gate(legacy_forecast, approval)
+        if gated.get("probability_up") is not None:
+            reliabilities.append(gated.get("reliability"))
+        out[horizon] = gated
     overall = (
         "High" if reliabilities and all(x == "High" for x in reliabilities)
         else "Medium" if reliabilities and any(x in ("High", "Medium") for x in reliabilities)

@@ -23,6 +23,7 @@ UNAVAILABLE_REASONS = {
     "HOLDOUT_CONTAMINATED",
     "NO_PRODUCTION_APPROVAL",
     "MODEL_VERSION_MISMATCH",
+    "MODEL_ARTIFACT_MISMATCH",
 }
 
 
@@ -185,7 +186,8 @@ def record_promotion(
         "evidence_hash": stable_hash(dict(evidence)),
         "evidence": dict(evidence),
     }
-    persist_json_record(f"forecast_model_state_{horizon}", record)
+    persisted = persist_json_record(f"forecast_model_state_{horizon}", record)
+    record["externally_persisted"] = bool(persisted)
     return record
 
 
@@ -193,7 +195,7 @@ def record_demotion(horizon: str, *, approval: Mapping[str, Any], reasons: list[
     record = dict(approval)
     record["status"] = "DEGRADED"
     record["demotion_reasons"] = list(reasons)
-    persist_json_record(f"forecast_model_state_{horizon}", record)
+    record["externally_persisted"] = bool(persist_json_record(f"forecast_model_state_{horizon}", record))
     return record
 
 
@@ -210,9 +212,12 @@ def publication_gate(forecast: Mapping[str, Any], approval: Mapping[str, Any] | 
             }
         )
         return out
+
     expected_version = approval.get("model_version")
+    expected_artifact = approval.get("artifact_hash")
     current_version = out.get("model_version")
-    if current_version and expected_version and current_version != expected_version:
+    current_artifact = out.get("artifact_hash")
+    if expected_version and current_version != expected_version:
         out.update(
             {
                 "probability_up": None,
@@ -223,6 +228,18 @@ def publication_gate(forecast: Mapping[str, Any], approval: Mapping[str, Any] | 
             }
         )
         return out
+    if expected_artifact and current_artifact != expected_artifact:
+        out.update(
+            {
+                "probability_up": None,
+                "state": "UNAVAILABLE",
+                "status": "UNAVAILABLE",
+                "reliability": "UNAVAILABLE",
+                "reason": "MODEL_ARTIFACT_MISMATCH",
+            }
+        )
+        return out
+
     out["production_approval"] = {
         "model_id": approval.get("model_id"),
         "model_version": approval.get("model_version"),
