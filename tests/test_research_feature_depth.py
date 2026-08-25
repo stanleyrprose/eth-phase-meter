@@ -73,6 +73,20 @@ def test_pit_history_depth_is_diagnostic_not_promotion_evidence():
     assert all(not item["effective_evidence_confirmed"] for item in report["horizons"].values())
 
 
+
+def test_pit_history_depth_cannot_be_inflated_by_dense_manual_runs():
+    records = []
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    for i in range(40):
+        record = _pit(0)
+        record["observed_at"] = (start + timedelta(minutes=10 * i)).isoformat()
+        records.append(record)
+    report = pit_history_depth(records)
+    assert report["raw_n"] == 40
+    assert report["horizons"]["3d"]["count_complete_windows"] == 2
+    assert report["horizons"]["3d"]["span_complete_windows"] == 0
+    assert report["horizons"]["3d"]["conservative_nonoverlap_n"] == 0
+
 def test_fred_details_preserve_observation_date_and_absolute_rate_change(monkeypatch):
     core.fred_latest_details.cache_clear()
     monkeypatch.setattr(
