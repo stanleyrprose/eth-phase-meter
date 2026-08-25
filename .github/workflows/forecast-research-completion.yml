@@ -28,13 +28,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
-      - run: python -m pip install -r requirements.txt
-      - run: python -m pip install pytest
+      - run: python -m pip install -r requirements-ci.lock
       - run: python -m pytest -q tests/test_research_foundation.py tests/test_forecast_research_m2_m9.py tests/test_forecast_research_completion.py
       - name: Generate M1-M9 implementation evidence
         run: python -m scripts.validate_forecast_research_plan

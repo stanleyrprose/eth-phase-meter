@@ -149,6 +149,7 @@ def main():
         "shadow_complete": True,
         "data_health_normal": True,
         "emergency_freeze_clear": True,
+        "holdout_clean": True,
         "effective_shadow_confirmed": False,
         "research_brier_skill": 0.03,
         "shadow_brier_skill": 0.02,

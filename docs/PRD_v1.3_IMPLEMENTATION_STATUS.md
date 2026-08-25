@@ -1,6 +1,6 @@
-# PRD v1.3 implementation status
+# PRD v1.3 implementation status — HISTORICAL / SUPERSEDED
 
-This repository is being migrated incrementally to the uploaded PRD v1.3 architecture.
+This file is a historical migration snapshot and MUST NOT be used as the current implementation status. See `PRD_IMPLEMENTATION_STATUS.md`, `FORECAST_RESEARCH_PRD_v2.3.md`, and `FORECAST_RESEARCH_IMPLEMENTATION_PLAN_v1.0.md`.
 
 ## Implemented in this change
 

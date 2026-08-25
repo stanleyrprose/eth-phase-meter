@@ -2,9 +2,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .run_manifest import dependency_hash
 
 PARSER_VERSION = "pit-parser-v1.3"
 FEATURE_VERSION = "features-v1.3"
@@ -129,6 +132,8 @@ def write_run_manifest(output_dir: Path, results: dict, extra: dict | None = Non
         "workflow_name": os.getenv("GITHUB_WORKFLOW", "local"),
         "workflow_run_id": os.getenv("GITHUB_RUN_ID", "local"),
         "repository": os.getenv("GITHUB_REPOSITORY", "unknown"),
+        "python_version": platform.python_version(),
+        "dependency_hash": dependency_hash(),
         "model_version": MODEL_VERSION,
         "feature_version": FEATURE_VERSION,
         "regime_version": REGIME_VERSION,

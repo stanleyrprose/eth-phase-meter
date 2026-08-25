@@ -124,3 +124,13 @@ def calibration_stability_report(
         "test": _metrics(y_test, p_test),
         "selection_used_test": False,
     }
+
+
+
+def calibration_decision(report: dict) -> str:
+    """Return the PRD v2.3 explicit calibration state."""
+    if not report.get("available"):
+        return "FAIL"
+    selected = str(report.get("selected") or report.get("winner") or "")
+    method = selected.rsplit(":", 1)[-1] if selected else ""
+    return "NO_CALIBRATION" if method == "none" else "PASS"

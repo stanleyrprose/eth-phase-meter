@@ -1,0 +1,41 @@
+name: Forecast Shadow Cycle
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '35 */4 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eth-shadow-cycle
+  cancel-in-progress: false
+
+jobs:
+  shadow-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install locked dependencies
+        run: pip install -r requirements.lock
+      - name: Apply versioned migrations
+        run: python -m scripts.apply_migrations
+      - name: Run shadow creation and settlement
+        run: python -m scripts.run_shadow_cycle
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: forecast-shadow-cycle-${{ github.run_number }}-${{ github.sha }}
+          path: |
+            eth_reports/shadow/
+            eth_reports/governance/migration_report.json
+          if-no-files-found: error
+          retention-days: 90

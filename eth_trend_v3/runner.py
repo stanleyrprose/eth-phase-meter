@@ -25,6 +25,10 @@ from .anomaly import detect as detect_anomalies
 from .alerts import build_alerts
 from .dashboard import write_dashboard
 from .promotion import current_production_approval, publication_gate
+from .model_state import current_model_state
+from .runtime_model import frozen_inference
+from .production_control import evaluate_runtime_demotion
+from .shadow_forecast import new_shadow_record, persist_shadow
 
 OUTPUT = Path(core.OUTPUT_DIR)
 
@@ -44,6 +48,7 @@ def _current_features(market_state, regime=None):
     }
     if regime:
         out["regime_code"] = REGIME_CODE.get(regime.get("regime"))
+        out["regime"] = regime.get("regime")
     return out
 
 
@@ -52,13 +57,54 @@ def _forecast_bundle(records, market_state, health, regime):
     out = {}
     reliabilities = []
     for horizon, hours in HORIZONS.items():
+        # Automatic production demotion is evaluated before any publication attempt.
+        evaluate_runtime_demotion(horizon, data_health=str(health.get("status") or "UNKNOWN"))
+        state = current_model_state(horizon)
+        if state and state.get("status") == "PRODUCTION":
+            frozen = frozen_inference(
+                horizon=horizon,
+                model_state=state,
+                current_features=current,
+                pit_records=records,
+                mode="PRODUCTION",
+            )
+            if frozen.get("available"):
+                production_forecast = {
+                    **frozen,
+                    "reason": "",
+                    "metrics": state.get("evidence") or {},
+                    "selected_model": state.get("model_id"),
+                    "research_only_probability": None,
+                }
+            else:
+                production_forecast = {
+                    "probability_up": None,
+                    "state": "UNAVAILABLE",
+                    "status": "UNAVAILABLE",
+                    "reliability": "UNAVAILABLE",
+                    "reason": frozen.get("reason") or "MODEL_ARTIFACT_MISSING",
+                    "model_version": state.get("model_version"),
+                    "artifact_hash": state.get("artifact_hash"),
+                    "inference_contract_hash": state.get("inference_contract_hash"),
+                    "metrics": state.get("evidence") or {},
+                    "selected_model": state.get("model_id"),
+                    "research_only_probability": None,
+                }
+            gated = publication_gate(production_forecast, state, horizon=horizon)
+            if gated.get("probability_up") is not None:
+                reliabilities.append(gated.get("reliability"))
+            out[horizon] = gated
+            continue
+
+        # Legacy on-the-fly path remains research-only and can never satisfy immutable
+        # production artifact/version requirements.
         rows = build_labeled_rows(records, hours, timeframe="4h")
         prob, wf, reason = fit_live_probability(rows, current)
         metrics = wf.get("metrics") or {}
         rel = reliability_from_metrics(metrics, float(health.get("coverage", 0)), int(wf.get("sample_size", 0)))
         if health.get("status") == "DATA_INSUFFICIENT":
             prob = None
-            reason = "DATA_INSUFFICIENT"
+            reason = "INSUFFICIENT_DATA"
         if health.get("stale_sources"):
             prob = None
             reason = "STALE_DATA"
@@ -71,21 +117,19 @@ def _forecast_bundle(records, market_state, health, regime):
             "metrics": metrics,
             "selected_model": wf.get("selected_model"),
             "reason": reason,
-            # The legacy on-the-fly fitting path deliberately has no immutable
-            # model_version/artifact_hash. publication_gate therefore keeps it
-            # UNAVAILABLE even if an unrelated production approval exists.
             "model_version": None,
             "artifact_hash": None,
+            "inference_contract_hash": None,
             "research_only_probability": prob,
         }
         approval = current_production_approval(horizon)
-        gated = publication_gate(legacy_forecast, approval)
+        gated = publication_gate(legacy_forecast, approval, horizon=horizon)
         if gated.get("probability_up") is not None:
             reliabilities.append(gated.get("reliability"))
         out[horizon] = gated
     overall = (
-        "High" if reliabilities and all(x == "High" for x in reliabilities)
-        else "Medium" if reliabilities and any(x in ("High", "Medium") for x in reliabilities)
+        "High" if reliabilities and all(x == "HIGH" for x in reliabilities)
+        else "Medium" if reliabilities and any(x in ("HIGH", "MEDIUM", "High", "Medium") for x in reliabilities)
         else "Low"
     )
     return out, overall
@@ -113,6 +157,36 @@ def _fail_closed_unreliable_forecasts(forecasts, model_health):
         forecast["reliability"] = "Low"
         forecast["reason"] = "MODEL_UNRELIABLE"
     return forecasts
+
+
+def _persist_production_forecasts(payload: dict, *, pit_snapshot_id: str) -> list[str]:
+    created = []
+    for horizon, forecast in (payload.get("forecasts") or {}).items():
+        if forecast.get("status") != "PRODUCTION" or forecast.get("probability_up") is None:
+            continue
+        record = new_shadow_record(
+            experiment_id=forecast.get("experiment_id") or (forecast.get("production_approval") or {}).get("experiment_id") or "UNKNOWN",
+            model_version=forecast.get("model_version"),
+            artifact_hash=forecast.get("artifact_hash"),
+            git_sha=os.getenv("GITHUB_SHA", "unknown"),
+            horizon=horizon,
+            probability=float(forecast["probability_up"]),
+            baseline_probability=float(forecast["baseline_probability"]),
+            market_state=payload.get("market_state") or {},
+            regime=(payload.get("regime") or {}).get("regime"),
+            data_health=(payload.get("data_health") or {}).get("status", "UNKNOWN"),
+            feature_snapshot_id=pit_snapshot_id,
+            settlement_time=forecast.get("settlement_time"),
+        )
+        record["mode"] = "PRODUCTION"
+        record["entry_price"] = payload.get("price")
+        record["inference_contract_hash"] = forecast.get("inference_contract_hash")
+        record["dataset_hash"] = forecast.get("dataset_hash")
+        record["config_hash"] = forecast.get("config_hash")
+        record["gate_version"] = forecast.get("gate_version")
+        persist_shadow(record)
+        created.append(record["forecast_id"])
+    return created
 
 
 def run_one(timeframe, history_records):
@@ -189,7 +263,9 @@ def run_one(timeframe, history_records):
     )
     persisted = persist_json_record("pit_snapshot", record)
     record["quality_flags"]["external_persisted"] = persisted
-    write_pit_snapshot(OUTPUT, timeframe, record)
+    pit_path = write_pit_snapshot(OUTPUT, timeframe, record)
+    if timeframe == "4h":
+        payload["production_forecast_ids"] = _persist_production_forecasts(payload, pit_snapshot_id=pit_path.name)
 
     persist_json_record(f"monitor_state_{timeframe}", payload)
     (OUTPUT / f"v3_snapshot_{timeframe}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
