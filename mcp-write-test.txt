@@ -1,0 +1,4 @@
+ChatGPT GitHub MCP write permission test.
+Date: 2026-08-25
+Target branch: test/chatgpt-mcp-write-20260825
+This file exists only to verify repository write access.
