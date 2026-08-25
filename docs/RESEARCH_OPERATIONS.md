@@ -31,7 +31,7 @@ Raw open-interest level is not assumed comparable across providers. A mixed prov
 
 ## PIT database backup
 
-`PIT Database Backup` creates a daily PostgreSQL custom-format logical backup from `DATABASE_URL`, verifies the archive is readable with `pg_restore --list`, writes a SHA-256 checksum, and uploads the backup as a private GitHub Actions artifact for 90 days.
+`PIT Database Backup` creates a daily PostgreSQL custom-format logical backup from `DATABASE_URL` using a pinned PostgreSQL 18 client container (matching the current server major), verifies the archive is readable with the same major `pg_restore --list`, writes a SHA-256 checksum, and uploads the backup as a private GitHub Actions artifact for 90 days. A client/server major mismatch is treated as a hard backup failure, not silently ignored.
 
 This secondary backup does not replace managed-database PITR. If the database provider offers longer retention/PITR, that remains the preferred primary disaster-recovery layer. No database dump is committed to this public repository.
 
