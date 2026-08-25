@@ -2159,17 +2159,22 @@ def format_tg_summary(result):
 
 
 def send_tg_message(text):
-    """发送文字消息到 Telegram"""
+    """发送文字消息到 Telegram，并返回结构化发送结果供生产验证记录。"""
     if not TG_API or not TG_CHAT_ID:
-        return
+        return {"status": "SKIPPED", "reason": "NOT_CONFIGURED"}
     try:
-        requests.post(f"{TG_API}/sendMessage", json={
+        response = requests.post(f"{TG_API}/sendMessage", json={
             "chat_id": TG_CHAT_ID,
             "text": text,
             "parse_mode": "HTML",
         }, timeout=15)
+        if response.ok:
+            return {"status": "SENT", "http_status": response.status_code}
+        print(f"  [WARN] TG 消息发送失败: HTTP {response.status_code}")
+        return {"status": "FAILED", "http_status": response.status_code}
     except Exception as e:
         print(f"  [WARN] TG 消息发送失败: {e}")
+        return {"status": "FAILED", "error": type(e).__name__}
 
 
 def send_tg_file(filepath, caption=""):
