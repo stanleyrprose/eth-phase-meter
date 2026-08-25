@@ -29,6 +29,10 @@ Existing PIT data now supports research-only group ablation for:
 
 Raw open-interest level is not assumed comparable across providers. A mixed provider regime is explicitly reported and non-dominant OI observations are marked missing for the group ablation.
 
+### HMM execution policy
+
+The standalone `HMM Historical Bootstrap` and `HMM Forecast Ablation` workflows remain available for explicit diagnostics, but they no longer run on an independent weekly schedule. HMM work is automatically executed from `Forecast Research Readiness` only after at least one horizon has enough canonical labeled PIT rows to justify a benchmark. This prevents weekly HMM churn while evidence is still structurally insufficient.
+
 ## PIT database backup
 
 `PIT Database Backup` creates a daily PostgreSQL custom-format logical backup from `DATABASE_URL` using a pinned PostgreSQL 18 client container (matching the current server major), verifies the archive is readable with the same major `pg_restore --list`, writes a SHA-256 checksum, and uploads the backup as a private GitHub Actions artifact for 90 days. A client/server major mismatch is treated as a hard backup failure, not silently ignored.

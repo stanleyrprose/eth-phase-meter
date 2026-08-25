@@ -2,8 +2,6 @@ name: HMM Forecast Ablation
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '20 4 * * 0'
 
 permissions:
   contents: read
