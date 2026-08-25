@@ -35,7 +35,12 @@ def path_outcome(entry_price:float, path_prices:Sequence[float])->dict:
     if entry_price<=0 or len(p)==0: raise ValueError("invalid path")
     returns=p/entry_price-1; running_max=np.maximum.accumulate(np.r_[entry_price,p]); draw=np.r_[entry_price,p]/running_max-1
     min_idx=int(np.argmin(draw)); recovery=len(draw)-1-min_idx if min_idx < len(draw)-1 else 0
-    return {"actual_return":float(p[-1]/entry_price-1),"actual_direction":int(p[-1]>entry_price),"mae":float(np.min(returns)),"mfe":float(np.max(returns)),"path_volatility":float(np.std(np.diff(np.log(np.r_[entry_price,p])),ddof=0)) if len(p)>1 else 0.0,"max_drawdown":float(np.min(draw)),"drawdown_duration_bars":int(recovery)}
+    # Round ratio-derived path metrics to a stable precision so exact decimal
+    # moves such as 100 -> 90 are reported as -0.1 instead of a binary
+    # floating-point artefact. This also keeps persisted shadow evidence
+    # deterministic across runner platforms.
+    stable=lambda value: round(float(value), 12)
+    return {"actual_return":stable(p[-1]/entry_price-1),"actual_direction":int(p[-1]>entry_price),"mae":stable(np.min(returns)),"mfe":stable(np.max(returns)),"path_volatility":stable(np.std(np.diff(np.log(np.r_[entry_price,p])),ddof=0)) if len(p)>1 else 0.0,"max_drawdown":stable(np.min(draw)),"drawdown_duration_bars":int(recovery)}
 
 
 def shadow_metrics(records:list[dict])->dict:
