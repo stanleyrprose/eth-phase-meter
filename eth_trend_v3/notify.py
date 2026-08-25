@@ -27,7 +27,9 @@ def prd_summary(payload: dict) -> str:
     lines+=['','🔎 <b>Market State</b>']
     labels={'trend':'Trend','valuation':'Valuation','capital_flow':'Capital Flow','crowding':'Crowding','structural_supply':'Structural','volatility_risk':'Volatility Risk'}
     for k,label in labels.items():
-        d=state.get(k) or {}; v=d.get('score'); lines.append(f"{label:16} {v:+.0f}" if isinstance(v,(int,float)) else f"{label:16} N/A")
+        d=state.get(k) or {}; v=d.get('score'); coverage=d.get('coverage')
+        suffix=f" ({coverage:.0f}% cov)" if isinstance(coverage,(int,float)) else ''
+        lines.append(f"{label:16} {v:+.0f}{suffix}" if isinstance(v,(int,float)) else f"{label:16} N/A{suffix}")
     lines+=['━━━━━━━━━━━━━━━━━━━━',f"📡 Data: <b>{health.get('status','UNKNOWN')}</b> | Coverage {health.get('coverage',0):.0f}%",f"🎯 Model Reliability: <b>{payload.get('model_reliability','Low')}</b>"]
     if payload.get('alerts'):
         lines+=['','⚠️ Alerts']+[f"L{a['level']} {a['type']}: {a['message']}" for a in payload['alerts'][:4]]
