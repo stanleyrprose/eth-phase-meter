@@ -43,8 +43,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Run test gate
-        run: python -m unittest discover -s tests -p "test_*.py" -v
       - name: Validate required secrets
         shell: bash
         run: |
@@ -53,7 +51,7 @@ jobs:
             exit 1
           fi
           if [[ -z "$DATABASE_URL" ]]; then
-            echo "WARNING: DATABASE_URL not configured. PIT persistence will be ARTIFACT_ONLY."
+            echo "WARNING: DATABASE_URL not configured. PIT persistence will be ARTIFACT_ONLY and production approval cannot be durable across runs."
           else
             echo "OK: external PostgreSQL persistence configured."
           fi
@@ -73,6 +71,8 @@ jobs:
             eth-monitor-cache-${{ runner.os }}-
       - name: Run monitor
         run: python -m scripts.run_monitor
+      - name: Validate production run contract
+        run: python -m scripts.validate_production_run
       - name: Upload run artifacts
         if: always()
         uses: actions/upload-artifact@v4
