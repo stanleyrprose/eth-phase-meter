@@ -2159,17 +2159,26 @@ def format_tg_summary(result):
 
 
 def send_tg_message(text):
-    """发送文字消息到 Telegram"""
+    """发送文字消息到 Telegram，并返回不含敏感信息的结构化发送状态。"""
     if not TG_API or not TG_CHAT_ID:
-        return
+        return {"status": "SKIPPED_NOT_CONFIGURED"}
     try:
-        requests.post(f"{TG_API}/sendMessage", json={
+        response = requests.post(f"{TG_API}/sendMessage", json={
             "chat_id": TG_CHAT_ID,
             "text": text,
             "parse_mode": "HTML",
         }, timeout=15)
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("ok") is not True:
+            description = str(payload.get("description") or "TELEGRAM_API_NOT_OK")
+            print(f"  [WARN] TG 消息发送失败: {description}")
+            return {"status": "FAILED", "reason": description[:240]}
+        message_id = (payload.get("result") or {}).get("message_id")
+        return {"status": "SENT", "message_id": message_id}
     except Exception as e:
         print(f"  [WARN] TG 消息发送失败: {e}")
+        return {"status": "FAILED", "reason": type(e).__name__}
 
 
 def send_tg_file(filepath, caption=""):

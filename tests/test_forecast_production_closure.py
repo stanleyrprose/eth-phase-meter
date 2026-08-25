@@ -12,6 +12,8 @@ def _summary(forecast):
             "timestamp": "2026-08-25 08:00 UTC",
             "data_health": {"status": "NORMAL"},
             "forecasts": {"3d": dict(forecast), "7d": dict(forecast), "30d": dict(forecast)},
+            "notification": {"status": "SENT", "message_id": 101},
+            "execution_gate_notification": {"status": "SENT", "message_id": 102},
         }
     }
 
@@ -54,3 +56,15 @@ def test_shadow_diagnostics_expose_span_overlap_and_regime_coverage_without_prom
     assert report["overlap_factor_estimate"] == 18.0
     assert report["conservative_nonoverlap_opportunities"] == 2
     assert report["regime_count"] == 2
+
+
+def test_post_run_validation_rejects_configured_but_failed_notification():
+    summary = _summary({"probability_up": None, "status": "UNAVAILABLE", "reason": "NO_PRODUCTION_APPROVAL"})
+    summary["4h"]["execution_gate_notification"] = {"status": "FAILED", "reason": "HTTPError"}
+    report = validate_production_summary(
+        summary,
+        now=datetime(2026, 8, 25, 9, tzinfo=UTC),
+        notification_configured=True,
+    )
+    assert report["ok"] is False
+    assert "EXECUTION_GATE_NOTIFICATION_NOT_SENT" in report["errors"]

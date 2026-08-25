@@ -171,8 +171,21 @@ def validate_production_summary(
             "baseline_available": baseline is not None,
         }
 
+    notification = primary.get("notification")
+    execution_gate_notification = primary.get("execution_gate_notification")
+    notification_reports = {
+        "primary": notification if isinstance(notification, Mapping) else None,
+        "execution_gate": execution_gate_notification if isinstance(execution_gate_notification, Mapping) else None,
+    }
     if notification_configured is False:
         warnings.append("TELEGRAM_NOT_CONFIGURED")
+    elif notification_configured is True:
+        for name, item in notification_reports.items():
+            if not isinstance(item, Mapping):
+                errors.append(f"MISSING_{name.upper()}_NOTIFICATION_STATUS")
+                continue
+            if item.get("status") != "SENT":
+                errors.append(f"{name.upper()}_NOTIFICATION_NOT_SENT")
 
     return {
         "ok": not errors,
@@ -182,5 +195,6 @@ def validate_production_summary(
         "age_hours": age_hours,
         "data_health": health_status,
         "notification_configured": notification_configured,
+        "notifications": notification_reports,
         "horizons": horizon_reports,
     }
