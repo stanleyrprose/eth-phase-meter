@@ -1,0 +1,28 @@
+name: Forecast Research Foundation Validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "eth_trend_v3/research_foundation.py"
+      - "tests/test_research_foundation.py"
+      - ".github/workflows/research-foundation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+      - name: Run foundation tests
+        run: pytest -q tests/test_research_foundation.py
