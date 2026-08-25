@@ -30,5 +30,9 @@ def collect(timeframe: str) -> dict:
         if r0 > 0: macro.update(ethbtc_price=r1, ethbtc_change=(r1 / r0 - 1) * 100, ethbtc_src='Deribit synthetic')
     ext=collect_external_state()
     for key in ('valuation','capital_flow','structural'):
-        stamps[key]={'observed_at':_now(),'source':'configured external provider' if ext.get(key) else 'not configured'}
+        payload = ext.get(key) or {}
+        stamps[key]={
+            'observed_at': payload.get('_observed_at') or _now(),
+            'source': payload.get('_source') or ('external provider' if payload else 'unavailable'),
+        }
     return {'candles':candles,'derivatives':derivatives,'options':options,'sentiment':sentiment,'macro':macro,**ext,'_meta':stamps}
