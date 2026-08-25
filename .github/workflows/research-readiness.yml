@@ -40,6 +40,12 @@ jobs:
       - name: Candidate eligibility report (never auto-promotes)
         if: steps.readiness.outputs.run_research_benchmark == 'true'
         run: python -m scripts.validate_model
+      - name: HMM historical bootstrap when research is ready
+        if: steps.readiness.outputs.run_research_benchmark == 'true'
+        run: python -m scripts.run_hmm_bootstrap
+      - name: HMM forecast ablation when research is ready
+        if: steps.readiness.outputs.run_research_benchmark == 'true'
+        run: python -m scripts.run_hmm_ablation
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -48,5 +54,7 @@ jobs:
             eth_reports/research-readiness/
             eth_reports/model_lab/
             eth_reports/validation_report.json
+            eth_reports/hmm_bootstrap/
+            eth_reports/hmm_ablation/
           if-no-files-found: warn
           retention-days: 90
