@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import platform
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,16 @@ def payload_hash(payload: Any) -> str:
     )
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
+
+
+def _schedule_nominal_time(observed_at: str, *, cadence_hours: int = 4, minute: int = 15) -> str:
+    dt = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    shifted = dt - timedelta(minutes=minute)
+    bucket_hour = (shifted.hour // cadence_hours) * cadence_hours
+    bucket = shifted.replace(hour=bucket_hour, minute=0, second=0, microsecond=0) + timedelta(minutes=minute)
+    return bucket.astimezone(timezone.utc).isoformat()
 
 def build_pit_record(
     timeframe: str,
@@ -102,7 +112,11 @@ def build_pit_record(
         "regime_version": REGIME_VERSION,
         "config_version": CONFIG_VERSION,
         "git_commit_sha": os.getenv("GITHUB_SHA", "unknown"),
+        "github_event": os.getenv("GITHUB_EVENT_NAME", "local"),
+        "workflow_name": os.getenv("GITHUB_WORKFLOW", "local"),
         "workflow_run_id": os.getenv("GITHUB_RUN_ID", "local"),
+        "workflow_run_attempt": os.getenv("GITHUB_RUN_ATTEMPT", "1"),
+        "schedule_nominal_time": _schedule_nominal_time(now),
     }
 
 

@@ -32,6 +32,42 @@ def load_pit_records(database_url:str|None=None,artifact_dir:str="eth_reports/pi
                 except Exception: pass
     return records
 
+
+def _canonical_bucket(stamp, *, timeframe: str = "4h"):
+    dt=_parse_time(stamp).astimezone(timezone.utc)
+    if timeframe=="4h":
+        # Align to the monitor cron (minute 15 every 4h), not to ad-hoc dispatch time.
+        from datetime import timedelta
+        shifted=dt-timedelta(minutes=15)
+        bucket_hour=(shifted.hour//4)*4
+        return shifted.replace(hour=bucket_hour,minute=0,second=0,microsecond=0)+timedelta(minutes=15)
+    return dt.replace(minute=0,second=0,microsecond=0)
+
+
+def canonicalize_pit_records(records:list[dict], timeframe:str="4h") -> list[dict]:
+    """Return one canonical observation per scheduled research bucket.
+
+    Prefer a real scheduled run; otherwise choose the earliest valid observation in the bucket.
+    Retries/manual dispatches therefore cannot manufacture additional research samples.
+    """
+    buckets={}
+    for record in records:
+        mv=record.get("metric_value") or {}
+        if mv.get("timeframe") != timeframe:
+            continue
+        stamp=record.get("observed_at") or record.get("event_time")
+        if not stamp:
+            continue
+        key=_canonical_bucket(record.get("schedule_nominal_time") or stamp,timeframe=timeframe)
+        event=str(record.get("github_event") or "legacy")
+        rank=0 if event=="schedule" else 1
+        observed=_parse_time(stamp)
+        choice=(rank,observed)
+        current=buckets.get(key)
+        if current is None or choice < current[0]:
+            buckets[key]=(choice,record)
+    return [buckets[key][1] for key in sorted(buckets)]
+
 def _numeric(value):
     try:
         return float(value) if value is not None else None
@@ -73,8 +109,9 @@ def feature_row(record:dict)->dict|None:
 
 def pit_history_depth(records:list[dict], timeframe:str="4h") -> dict:
     """Observation-depth diagnostic only; never use it as promotion evidence by itself."""
+    canonical=canonicalize_pit_records(records,timeframe=timeframe)
     rows=[]
-    for record in records:
+    for record in canonical:
         mv=record.get("metric_value") or {}
         if mv.get("timeframe") != timeframe:
             continue
@@ -83,8 +120,9 @@ def pit_history_depth(records:list[dict], timeframe:str="4h") -> dict:
             rows.append(_parse_time(stamp))
     rows=sorted(set(rows))
     raw_n=len(rows)
+    source_raw_n=sum(1 for r in records if (r.get("metric_value") or {}).get("timeframe")==timeframe)
     if not rows:
-        return {"timeframe":timeframe,"raw_n":0,"first_observed_at":None,"last_observed_at":None,"span_days":0.0,"horizons":{},"kind":"DIAGNOSTIC"}
+        return {"timeframe":timeframe,"raw_n":0,"source_raw_n":source_raw_n,"duplicates_removed":source_raw_n,"first_observed_at":None,"last_observed_at":None,"span_days":0.0,"horizons":{},"kind":"DIAGNOSTIC"}
     span_hours=max(0.0,(rows[-1]-rows[0]).total_seconds()/3600.0)
     per_horizon={}
     bar_hours=4 if timeframe=="4h" else 1
@@ -106,6 +144,8 @@ def pit_history_depth(records:list[dict], timeframe:str="4h") -> dict:
     return {
         "timeframe":timeframe,
         "raw_n":raw_n,
+        "source_raw_n":source_raw_n,
+        "duplicates_removed":max(0,source_raw_n-raw_n),
         "first_observed_at":rows[0].isoformat(),
         "last_observed_at":rows[-1].isoformat(),
         "span_days":span_hours/24.0,
@@ -114,7 +154,8 @@ def pit_history_depth(records:list[dict], timeframe:str="4h") -> dict:
     }
 
 def build_labeled_rows(records:list[dict],horizon_hours:int,tolerance_hours:int=8,timeframe:str="4h")->list[dict]:
-    rows=[feature_row(r) for r in records]; rows=[r for r in rows if r and r.get("timeframe")==timeframe]; rows.sort(key=lambda r:_parse_time(r["timestamp"])); out=[]
+    canonical=canonicalize_pit_records(records,timeframe=timeframe)
+    rows=[feature_row(r) for r in canonical]; rows=[r for r in rows if r and r.get("timeframe")==timeframe]; rows.sort(key=lambda r:_parse_time(r["timestamp"])); out=[]
     for i,row in enumerate(rows):
         t0=_parse_time(row["timestamp"]).timestamp(); target=t0+horizon_hours*3600; best=None; best_dt=None
         for j in range(i+1,len(rows)):

@@ -1,0 +1,46 @@
+name: PIT Database Backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eth-pit-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require database
+        run: |
+          if [[ -z "$DATABASE_URL" ]]; then
+            echo 'ERROR: DATABASE_URL is required for PIT backup.'
+            exit 1
+          fi
+      - name: Create logical PostgreSQL backup
+        run: |
+          mkdir -p eth_reports/backups
+          pg_dump --format=custom --no-owner --no-acl "$DATABASE_URL" --file eth_reports/backups/eth-phase-meter.dump
+      - name: Verify archive can be read by pg_restore
+        run: |
+          pg_restore --list eth_reports/backups/eth-phase-meter.dump > eth_reports/backups/restore-list.txt
+          test -s eth_reports/backups/restore-list.txt
+      - name: Write backup checksum and metadata
+        run: |
+          sha256sum eth_reports/backups/eth-phase-meter.dump > eth_reports/backups/SHA256SUMS
+          printf 'run_id=%s\nsha=%s\ncreated_at=%s\n' "${GITHUB_RUN_ID}" "${GITHUB_SHA}" "$(date -u +%FT%TZ)" > eth_reports/backups/backup-metadata.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eth-pit-db-backup-${{ github.run_number }}-${{ github.sha }}
+          path: eth_reports/backups/
+          if-no-files-found: error
+          retention-days: 90

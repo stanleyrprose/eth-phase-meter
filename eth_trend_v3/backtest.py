@@ -7,6 +7,7 @@ from .dataset import HORIZONS, load_pit_records, build_labeled_rows
 from .forecast import expanding_walk_forward
 from .ablation import run_ablation
 from .correlation import correlation_audit
+from .research_feature_groups import group_ablation
 
 
 def run(output_dir="eth_reports/model_lab"):
@@ -22,10 +23,12 @@ def run(output_dir="eth_reports/model_lab"):
         wf = expanding_walk_forward(rows, ["trend"])
         corr = correlation_audit(rows)
         ablation = run_ablation(rows)
+        registered_group_ablation = group_ablation(rows)
         report["horizons"][horizon] = {
             **wf,
             "correlation_audit": corr,
             "ablation": ablation,
+            "registered_feature_group_ablation": registered_group_ablation,
         }
         for bucket in (wf.get("metrics") or {}).get("calibration", []):
             cal_rows.append({"horizon": horizon, **bucket})
