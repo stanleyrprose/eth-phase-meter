@@ -7,6 +7,7 @@ on:
       - 'eth_trend_v3/**'
       - 'scripts/**'
       - 'tests/test_prd_v23_*.py'
+      - 'tests/test_research_feature_depth.py'
       - 'migrations/**'
       - 'requirements*.lock'
       - 'docs/FORECAST_RESEARCH_*'
@@ -43,6 +44,7 @@ jobs:
           python -m pytest -q
           tests/test_prd_v23_governance.py
           tests/test_prd_v23_acceptance.py
+          tests/test_research_feature_depth.py
           tests/test_research_foundation.py
           tests/test_forecast_research_m2_m9.py
           tests/test_forecast_research_completion.py

@@ -48,15 +48,25 @@ def validate_feature_contract(meta: FeatureMeta) -> None:
 
 
 def external_feature_contracts() -> list[FeatureMeta]:
+    """Registered research candidates; registration does not imply predictive eligibility."""
     return [
-        FeatureMeta("funding", "v1", "derivatives", "provider funding rate", "point", "closed/observed provider value", "provider-specific", "mark_missing", "derivatives_crowding", "3d,7d"),
+        FeatureMeta("funding_rate", "v2", "derivatives", "perpetual funding rate as reported by active provider", "point", "PIT snapshot retrieval; provider timestamp if exposed", "provider-specific", "mark_missing", "derivatives_crowding", "3d,7d", retrieval_time_field="observed_at"),
         FeatureMeta("basis", "v1", "derivatives", "futures basis", "point", "observed provider value", "provider-specific", "mark_missing", "derivatives_crowding", "3d,7d"),
-        FeatureMeta("open_interest", "v1", "derivatives", "open interest", "point", "observed provider value", "provider-specific", "mark_missing", "derivatives_positioning", "3d,7d"),
+        FeatureMeta("open_interest", "v2", "derivatives", "provider-native open interest level; compare only within a consistent provider/unit regime", "point", "PIT snapshot retrieval", "provider-specific", "mark_missing", "derivatives_positioning", "3d,7d", retrieval_time_field="observed_at"),
+        FeatureMeta("put_call_oi_ratio", "v1", "Deribit options", "aggregate put open interest / call open interest", "point", "PIT snapshot retrieval", "collector latency", "mark_missing", "options_positioning", "3d,7d", retrieval_time_field="observed_at"),
+        FeatureMeta("atm_iv_near", "v1", "Deribit options", "near-expiry ATM mark implied volatility", "point", "PIT snapshot retrieval", "collector latency", "mark_missing", "options_volatility", "3d,7d", retrieval_time_field="observed_at"),
+        FeatureMeta("iv_skew_25d_proxy_near", "v1", "Deribit options", "near-expiry OTM put mark IV - OTM call mark IV proxy", "point", "PIT snapshot retrieval", "collector latency", "mark_missing", "options_skew", "3d,7d", retrieval_time_field="observed_at"),
+        FeatureMeta("iv_term_structure_near_next", "v1", "Deribit options", "near ATM IV - next-expiry ATM IV", "point", "PIT snapshot retrieval", "collector latency", "mark_missing", "options_term_structure", "3d,7d", retrieval_time_field="observed_at"),
         FeatureMeta("exchange_netflow_eth", "v1", "onchain", "exchange inflow - outflow", "rolling", "event-time aggregation available after query completion", "query-specific", "mark_missing", "capital_flow", "3d,7d,30d"),
         FeatureMeta("stablecoin_flow_usd", "v1", "onchain", "stablecoin exchange netflow", "rolling", "event-time aggregation available after query completion", "query-specific", "mark_missing", "capital_flow", "7d,30d"),
         FeatureMeta("staking_netflow_eth", "v1", "onchain", "staking inflow - outflow", "rolling", "event-time aggregation available after query completion", "query-specific", "mark_missing", "structural_supply", "7d,30d"),
-        FeatureMeta("dxy_return", "v1", "macro", "DXY return", "rolling", "available only after source observation timestamp", "source-specific", "mark_missing", "macro_dollar", "7d,30d"),
-        FeatureMeta("us10y_change", "v1", "macro", "US10Y yield change", "rolling", "available only after source observation timestamp", "source-specific", "mark_missing", "macro_rates", "7d,30d"),
+        FeatureMeta("dxy_return", "v2", "FRED DTWEXBGS / fallback", "daily return of Nominal Broad U.S. Dollar Index", "1 observation", "PIT snapshot retrieval; FRED observation date retained", "daily/source-specific", "mark_missing", "macro_dollar", "7d,30d", event_time_field="raw_payload.macro.dxy_observation_date", retrieval_time_field="observed_at"),
+        FeatureMeta("us10y_change_bps", "v2", "FRED DGS10", "daily 10Y Treasury yield change in basis points", "1 observation", "PIT snapshot retrieval; FRED observation date retained", "daily/source-specific", "mark_missing", "macro_rates", "7d,30d", event_time_field="raw_payload.macro.us10y_observation_date", retrieval_time_field="observed_at"),
+        FeatureMeta("us2y_change_bps", "v1", "FRED DGS2", "daily 2Y Treasury yield change in basis points", "1 observation", "PIT snapshot retrieval; FRED observation date retained", "daily/source-specific", "mark_missing", "macro_rates", "7d,30d", event_time_field="raw_payload.macro.us2y_observation_date", retrieval_time_field="observed_at"),
+        FeatureMeta("real10y_change_bps", "v1", "FRED DFII10", "daily 10Y inflation-indexed Treasury real-yield change in basis points", "1 observation", "PIT snapshot retrieval; FRED observation date retained", "daily/source-specific", "mark_missing", "macro_real_rates", "7d,30d", event_time_field="raw_payload.macro.real10y_observation_date", retrieval_time_field="observed_at"),
+        FeatureMeta("yield_curve_10y2y_pp", "v1", "FRED DGS10-DGS2 / fallback", "10Y nominal yield - 2Y nominal yield in percentage points", "point", "PIT snapshot retrieval", "daily/source-specific", "mark_missing", "macro_curve", "7d,30d", retrieval_time_field="observed_at"),
+        FeatureMeta("btc_return_24h_pct", "v1", "Binance/Deribit", "BTC 24h price return in percent", "24h", "PIT snapshot retrieval", "exchange latency", "mark_missing", "macro_crypto_beta", "3d,7d,30d", retrieval_time_field="observed_at"),
+        FeatureMeta("ethbtc_return_24h_pct", "v1", "Binance/Deribit synthetic", "ETH/BTC 24h relative return in percent", "24h", "PIT snapshot retrieval", "exchange latency", "mark_missing", "macro_relative_strength", "3d,7d,30d", retrieval_time_field="observed_at"),
     ]
 
 

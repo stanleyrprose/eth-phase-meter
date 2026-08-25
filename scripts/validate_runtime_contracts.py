@@ -54,12 +54,15 @@ def validate_runtime_contracts() -> dict:
 
     if os.getenv("FRED_API_KEY"):
         try:
-            r = requests.get(
-                "https://api.stlouisfed.org/fred/series/observations",
-                params={"series_id": "DGS10", "api_key": os.getenv("FRED_API_KEY"), "file_type": "json", "limit": 1, "sort_order": "desc"},
-                timeout=20,
-            )
-            checks.append(_result("fred", required=False, ok=bool(r.ok and (r.json().get("observations") or [])), detail=f"http={r.status_code}"))
+            series_status = {}
+            for series_id in ("DTWEXBGS", "DGS10", "DGS2", "DFII10"):
+                r = requests.get(
+                    "https://api.stlouisfed.org/fred/series/observations",
+                    params={"series_id": series_id, "api_key": os.getenv("FRED_API_KEY"), "file_type": "json", "limit": 1, "sort_order": "desc"},
+                    timeout=20,
+                )
+                series_status[series_id] = bool(r.ok and (r.json().get("observations") or []))
+            checks.append(_result("fred", required=False, ok=all(series_status.values()), detail={"series": series_status}))
         except Exception as exc:
             checks.append(_result("fred", required=False, ok=False, detail=type(exc).__name__))
     else:
