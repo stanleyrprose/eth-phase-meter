@@ -48,7 +48,7 @@ No API key is required. The published Farside Investors ETH ETF table is read on
 - original US$m value → `capital_flow.etf_flow_musd`;
 - table date → `capital_flow.etf_flow_date` and provider `_observed_at`.
 
-This is a public web-table integration rather than a versioned API. Parsing failure, markup change, or temporary blocking is therefore an **optional provider warning**, not a hard Data Health failure when independent Capital Flow data remains available. Attribution is preserved in `_source`.
+This is a public web-table integration rather than a versioned API. The collector first requests Farside directly; if a bot-protected runner receives an HTTP/blocking failure, it may retry the same Farside page through the read-only Jina Reader transport. When that fallback is used, `_source` explicitly says `Farside Investors via Jina Reader`. Parsing failure, markup change, or temporary blocking of both paths is an **optional provider warning**, not a hard Data Health failure when independent Capital Flow data remains available.
 
 ## Dune — optional enrichment
 

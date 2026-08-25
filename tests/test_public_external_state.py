@@ -58,6 +58,23 @@ class TestPublicExternalState(unittest.TestCase):
         self.assertIn("Farside", flow["_source"])
 
     @patch("eth_trend_v3.external_state.requests.get")
+    def test_farside_uses_jina_reader_when_direct_page_is_bot_blocked(self, get):
+        direct = Mock(ok=False, status_code=403, text="cloudflare")
+        direct.json.side_effect = ValueError("not json")
+        proxy = Mock(ok=True)
+        proxy.text = """
+        | 21 Aug 2026 | 150.8 | 9.9 | 9.6 | 2.2 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 11.5 | 184.0 |
+        | 24 Aug 2026 | 90.9 | 0.0 | 6.8 | 0.9 | 0.0 | 4.5 | 0.0 | 0.0 | 0.0 | 12.5 | 115.6 |
+        """
+        get.side_effect = [direct, proxy]
+
+        flow = external_state._farside_eth_etf_state()["capital_flow"]
+        self.assertEqual(flow["etf_flow_usd"], 115600000.0)
+        self.assertEqual(flow["etf_flow_date"], "2026-08-24")
+        self.assertIn("via Jina Reader", flow["_source"])
+        self.assertEqual(get.call_count, 2)
+
+    @patch("eth_trend_v3.external_state.requests.get")
     def test_defillama_supply_change_stays_distinct_from_cex_flow(self, get):
         response = Mock(ok=True)
         response.json.return_value = [
