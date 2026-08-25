@@ -21,7 +21,10 @@ def test_post_run_validation_accepts_explicit_fail_closed_forecasts():
         _summary({"probability_up": None, "status": "UNAVAILABLE", "reason": "NO_PRODUCTION_APPROVAL"}),
         now=datetime(2026, 8, 25, 9, tzinfo=UTC),
         notification_configured=True,
-        notification_status={"status": "SENT", "http_status": 200},
+        notification_status={
+            "forecast_summary": {"status": "SENT", "http_status": 200},
+            "execution_gate": {"status": "SENT", "http_status": 200},
+        },
     )
     assert report["ok"] is True
 
@@ -57,12 +60,15 @@ def test_shadow_diagnostics_expose_span_overlap_and_regime_coverage_without_prom
     assert report["regime_count"] == 2
 
 
-def test_post_run_validation_requires_actual_notification_confirmation_when_configured():
+def test_post_run_validation_requires_execution_gate_notification_confirmation_when_configured():
     report = validate_production_summary(
         _summary({"probability_up": None, "status": "UNAVAILABLE", "reason": "NO_PRODUCTION_APPROVAL"}),
         now=datetime(2026, 8, 25, 9, tzinfo=UTC),
         notification_configured=True,
-        notification_status={"status": "FAILED", "http_status": 500},
+        notification_status={
+            "forecast_summary": {"status": "SENT", "http_status": 200},
+            "execution_gate": {"status": "FAILED", "http_status": 500},
+        },
     )
     assert report["ok"] is False
-    assert "TELEGRAM_NOTIFICATION_NOT_CONFIRMED" in report["errors"]
+    assert "TELEGRAM_EXECUTION_GATE_NOT_CONFIRMED" in report["errors"]

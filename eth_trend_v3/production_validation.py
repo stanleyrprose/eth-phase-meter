@@ -175,9 +175,18 @@ def validate_production_summary(
     if notification_configured is False:
         warnings.append("TELEGRAM_NOT_CONFIGURED")
     elif notification_configured is True:
-        status = (notification_status or {}).get("status") if isinstance(notification_status, Mapping) else None
-        if status != "SENT":
-            errors.append("TELEGRAM_NOTIFICATION_NOT_CONFIRMED")
+        if isinstance(notification_status, Mapping) and (
+            "forecast_summary" in notification_status or "execution_gate" in notification_status
+        ):
+            for name in ("forecast_summary", "execution_gate"):
+                item = notification_status.get(name)
+                status = item.get("status") if isinstance(item, Mapping) else None
+                if status != "SENT":
+                    errors.append(f"TELEGRAM_{name.upper()}_NOT_CONFIRMED")
+        else:
+            status = (notification_status or {}).get("status") if isinstance(notification_status, Mapping) else None
+            if status != "SENT":
+                errors.append("TELEGRAM_NOTIFICATION_NOT_CONFIRMED")
 
     return {
         "ok": not errors,
