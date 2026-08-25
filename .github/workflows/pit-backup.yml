@@ -26,13 +26,21 @@ jobs:
             echo 'ERROR: DATABASE_URL is required for PIT backup.'
             exit 1
           fi
-      - name: Create logical PostgreSQL backup
+      - name: Create logical PostgreSQL 18 backup
         run: |
           mkdir -p eth_reports/backups
-          pg_dump --format=custom --no-owner --no-acl "$DATABASE_URL" --file eth_reports/backups/eth-phase-meter.dump
-      - name: Verify archive can be read by pg_restore
+          docker run --rm \
+            -e DATABASE_URL \
+            -v "$PWD/eth_reports/backups:/backup" \
+            postgres:18 \
+            sh -lc 'pg_dump --format=custom --no-owner --no-acl "$DATABASE_URL" --file /backup/eth-phase-meter.dump'
+      - name: Verify archive can be read by PostgreSQL 18 pg_restore
         run: |
-          pg_restore --list eth_reports/backups/eth-phase-meter.dump > eth_reports/backups/restore-list.txt
+          docker run --rm \
+            -v "$PWD/eth_reports/backups:/backup" \
+            postgres:18 \
+            sh -lc 'pg_restore --list /backup/eth-phase-meter.dump' \
+            > eth_reports/backups/restore-list.txt
           test -s eth_reports/backups/restore-list.txt
       - name: Write backup checksum and metadata
         run: |
