@@ -1,4 +1,5 @@
 import unittest
+from datetime import date, datetime, timezone
 from unittest.mock import Mock, patch
 
 from eth_trend_v3 import external_state
@@ -18,6 +19,11 @@ class TestPublicExternalState(unittest.TestCase):
                     "AdrActCnt": "800000",
                     "FeeTotNtv": "200",
                     "TxCnt": "1700000",
+                    "FlowInExNtv": "160000",
+                    "FlowOutExNtv": "140000",
+                    "FlowInExUSD": "390000000",
+                    "FlowOutExUSD": "350000000",
+                    "IssTotNtv": "2933.1",
                 },
                 {
                     "time": "2026-08-24T00:00:00.000000000Z",
@@ -27,6 +33,11 @@ class TestPublicExternalState(unittest.TestCase):
                     "AdrActCnt": "851215",
                     "FeeTotNtv": "397.47",
                     "TxCnt": "1859865",
+                    "FlowInExNtv": "347821.45",
+                    "FlowOutExNtv": "365987.68",
+                    "FlowInExUSD": "863210266.90",
+                    "FlowOutExUSD": "908294535.14",
+                    "IssTotNtv": "2932.31",
                 },
             ]
         }
@@ -34,11 +45,15 @@ class TestPublicExternalState(unittest.TestCase):
 
         state = external_state._coinmetrics_community_state()
         self.assertAlmostEqual(state["valuation"]["mvrv"], 1.12)
+        self.assertAlmostEqual(state["capital_flow"]["exchange_netflow_eth"], -18166.23)
+        self.assertEqual(state["capital_flow"]["exchange_inflow_eth"], 347821.45)
+        self.assertEqual(state["capital_flow"]["exchange_outflow_eth"], 365987.68)
         self.assertAlmostEqual(state["structural"]["net_issuance_eth"], 3000.0)
         self.assertAlmostEqual(state["structural"]["exchange_balance_change_pct"], -0.2)
         self.assertEqual(state["structural"]["active_addresses"], 851215.0)
         self.assertEqual(state["structural"]["network_fees_eth"], 397.47)
         self.assertEqual(state["structural"]["transaction_count"], 1859865.0)
+        self.assertEqual(state["structural"]["gross_issuance_eth"], 2932.31)
         self.assertEqual(state["valuation"]["_observed_at"], "2026-08-24T00:00:00.000000000Z")
 
     @patch("eth_trend_v3.external_state.requests.get")
@@ -56,6 +71,15 @@ class TestPublicExternalState(unittest.TestCase):
         self.assertEqual(flow["etf_flow_usd"], -33500000.0)
         self.assertEqual(flow["etf_flow_date"], "2026-08-24")
         self.assertIn("Farside", flow["_source"])
+
+    def test_farside_ignores_same_day_placeholder_row(self):
+        candidates = [
+            (datetime(2026, 8, 24, tzinfo=timezone.utc), 115.6),
+            (datetime(2026, 8, 25, tzinfo=timezone.utc), 0.0),
+        ]
+        day, total = external_state._latest_closed_farside_candidate(candidates, today_et=date(2026, 8, 25))
+        self.assertEqual(day.date().isoformat(), "2026-08-24")
+        self.assertEqual(total, 115.6)
 
     @patch("eth_trend_v3.external_state.requests.get")
     def test_farside_uses_jina_reader_when_direct_page_is_bot_blocked(self, get):
