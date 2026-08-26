@@ -24,4 +24,30 @@ class TestMarketState(unittest.TestCase):
         flow=state['dimensions']['capital_flow']
         self.assertEqual(flow['coverage'],75)
 
+
+    def test_staking_queue_is_independent_structural_fallback_and_gives_third_slot(self):
+        r=SimpleNamespace(quality={'families':{'Technical':{'nominal':40,'active':40,'coverage':100,'contribution':20}}},crowding=50,volatility=30)
+        state=build_market_state({
+            'valuation':{},
+            'capital_flow':{},
+            'structural':{
+                'net_issuance_eth':3000,
+                'exchange_balance_change_pct':-0.2,
+                'staking_queue_imbalance_pct':90,
+            },
+        },r)
+        structural=state['dimensions']['structural_supply']
+        self.assertEqual(structural['coverage'],75)
+        self.assertGreater(structural['score'],0)
+
+    def test_realized_staking_flow_takes_precedence_over_queue_proxy(self):
+        r=SimpleNamespace(quality={'families':{'Technical':{'nominal':40,'active':40,'coverage':100,'contribution':20}}},crowding=50,volatility=30)
+        state=build_market_state({
+            'valuation':{}, 'capital_flow':{},
+            'structural':{'staking_netflow_eth':-50000,'staking_queue_imbalance_pct':100},
+        },r)
+        structural=state['dimensions']['structural_supply']
+        self.assertEqual(structural['coverage'],25)
+        self.assertEqual(structural['score'],-100)
+
 if __name__=='__main__': unittest.main()

@@ -53,6 +53,21 @@ No API key is required. The published Farside Investors ETH ETF table is read on
 
 This is a public web-table integration rather than a versioned API. The collector first requests Farside directly; if a bot-protected runner receives an HTTP/blocking failure, it may retry the same Farside page through the read-only Jina Reader transport. When that fallback is used, `_source` explicitly says `Farside Investors via Jina Reader`. The collector only accepts rows dated before the current `America/New_York` calendar day, because Farside may expose a same-day placeholder/partial row (including `0.0`) before the US trading day is complete. Parsing failure, markup change, or temporary blocking of both paths is an **optional provider warning**, not a hard Data Health failure when independent Capital Flow data remains available.
 
+## Public baseline — beaconcha.in staking queues
+
+No API key is required. The public Validator Queues page is read directly when possible, with the read-only Jina Reader used as transport when the page blocks automated runners. The collector parses two explicitly labeled queue values:
+
+- `Pending Deposit Value` → `structural.staking_pending_deposit_eth`;
+- `Total Withdrawal/Outflow Value` → `structural.staking_withdrawal_outflow_backlog_eth`.
+
+It derives the bounded descriptive proxy:
+
+`staking_queue_imbalance_pct = (pending_deposit - withdrawal_outflow) / (pending_deposit + withdrawal_outflow) * 100`.
+
+This is **pending staking pressure**, not realized staking netflow. In Structural Supply it occupies the staking-evidence slot only when a realized `staking_netflow_eth` is unavailable. A positive value means the pending deposit queue dominates the pending withdrawal/outflow backlog; a negative value means pending outflow dominates. The queue source is independent from Coin Metrics issuance/exchange-balance fields and from DefiLlama stablecoin data.
+
+Markup/transport failure leaves the staking slot missing and does not zero-fill it. The source remains optional for overall Data Health while Coin Metrics structural baseline remains available.
+
 ## Free baseline — Etherscan staking counters
 
 The repository already has a free-tier `ETHERSCAN_API_KEY`; no new credential or paid plan is introduced. Etherscan is used only for two cumulative point-in-time counters:

@@ -8,6 +8,8 @@ from eth_trend_v3 import external_state
 class TestDuneExternalState(unittest.TestCase):
     def setUp(self):
         self.old = dict(os.environ)
+        self.beacon_patcher = patch("eth_trend_v3.external_state._beaconchain_queue_state", return_value={"structural": {}})
+        self.beacon_patcher.start()
         for k in (
             "DUNE_API_KEY",
             "ETH_VALUATION_API_URL",
@@ -17,6 +19,7 @@ class TestDuneExternalState(unittest.TestCase):
             os.environ.pop(k, None)
 
     def tearDown(self):
+        self.beacon_patcher.stop()
         os.environ.clear()
         os.environ.update(self.old)
 

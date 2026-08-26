@@ -8,6 +8,7 @@ from pathlib import Path
 import requests
 
 from eth_trend_v3.external_state import (
+    _beaconchain_queue_state,
     _coinmetrics_community_state,
     _defillama_stablecoin_state,
     _dune_execute,
@@ -45,6 +46,18 @@ def validate_runtime_contracts() -> dict:
 
     farside = _farside_eth_etf_state().get("capital_flow") or {}
     checks.append(_result("farside-etf", required=False, ok=farside.get("etf_flow_usd") is not None, detail=farside.get("_error") or farside.get("_source")))
+
+    beacon_queue = _beaconchain_queue_state().get("structural") or {}
+    checks.append(_result(
+        "beaconchain-staking-queues",
+        required=False,
+        ok=beacon_queue.get("staking_queue_imbalance_pct") is not None,
+        detail=beacon_queue.get("_error") or {
+            "pending_deposit": beacon_queue.get("staking_pending_deposit_eth") is not None,
+            "withdrawal_backlog": beacon_queue.get("staking_withdrawal_outflow_backlog_eth") is not None,
+            "source": beacon_queue.get("_source"),
+        },
+    ))
 
 
     etherscan_key = os.getenv("ETHERSCAN_API_KEY")
