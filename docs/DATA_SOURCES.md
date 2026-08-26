@@ -53,6 +53,25 @@ No API key is required. The published Farside Investors ETH ETF table is read on
 
 This is a public web-table integration rather than a versioned API. The collector first requests Farside directly; if a bot-protected runner receives an HTTP/blocking failure, it may retry the same Farside page through the read-only Jina Reader transport. When that fallback is used, `_source` explicitly says `Farside Investors via Jina Reader`. The collector only accepts rows dated before the current `America/New_York` calendar day, because Farside may expose a same-day placeholder/partial row (including `0.0`) before the US trading day is complete. Parsing failure, markup change, or temporary blocking of both paths is an **optional provider warning**, not a hard Data Health failure when independent Capital Flow data remains available.
 
+## Free baseline — Etherscan staking counters
+
+The repository already has a free-tier `ETHERSCAN_API_KEY`; no new credential or paid plan is introduced. Etherscan is used only for two cumulative point-in-time counters:
+
+- the Ethereum mainnet Beacon deposit-contract balance at `0x00000000219ab540356cBB839Cbe05303d7705Fa` → `structural.staking_deposit_contract_balance_eth`;
+- `stats/ethsupply2.WithdrawnTotal` → `structural.beacon_withdrawn_total_eth`.
+
+`Eth2Staking` from `ethsupply2` is documented as cumulative **staking rewards**, not active staked ETH. It is retained only as a descriptive legacy/reward field and must not be interpreted as an active-stake ratio.
+
+The cumulative counters are persisted in each PIT snapshot. Once an earlier canonical 4h PIT exists approximately 24 hours back, the system derives:
+
+- `staking_deposits_24h_eth = Δ deposit-contract balance`;
+- `beacon_withdrawals_24h_eth = Δ WithdrawnTotal`;
+- `staking_netflow_eth = staking_deposits_24h_eth - beacon_withdrawals_24h_eth`.
+
+This is intentionally PIT-derived: the first ~24 hours after deployment remain `WAITING_FOR_24H_BASELINE`; missing history is never imputed as zero. Counter regressions fail closed. Dune staking flow, when available, remains optional parallel enrichment and does not overwrite the free baseline.
+
+**Semantic boundary:** this is a liquid-supply structural flow, not a directional price forecast. Positive means more ETH entered validator staking than returned from Beacon withdrawals during the measured window. Predictive use still requires the existing walk-forward/ablation gates.
+
 ## Dune — optional enrichment
 
 Environment: `DUNE_API_KEY`.
@@ -61,7 +80,7 @@ When the account tier permits programmatic SQL execution, Dune curated tables pr
 
 - `capital_flow.exchange_netflow_eth` from `cex.flows`;
 - `capital_flow.stablecoin_flow_usd` from stablecoin `cex.flows`;
-- `structural.staking_netflow_eth` from `staking_ethereum.flows`.
+- `structural.staking_netflow_eth` from `staking_ethereum.flows` as an optional parallel/enrichment measurement when the Dune tier permits it.
 
 A Dune subscription/API failure is retained under `_provider_errors.dune`. It does **not** invalidate an otherwise available independent public metric in the same dimension. If no independent metric exists, the dimension remains explicitly errored/unavailable.
 

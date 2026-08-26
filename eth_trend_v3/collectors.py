@@ -29,6 +29,25 @@ def collect(timeframe: str) -> dict:
         r0, r1 = eth[0] / btc[0], eth[1] / btc[1]
         if r0 > 0: macro.update(ethbtc_price=r1, ethbtc_change=(r1 / r0 - 1) * 100, ethbtc_src='Deribit synthetic')
     ext=collect_external_state()
+    # Reuse the existing free Etherscan call from fetch_macro as an independent
+    # cumulative staking counter source. A 24h flow is derived later at the PIT
+    # boundary so missing history is never imputed as zero.
+    structural = dict(ext.get('structural') or {})
+    etherscan_staking = {
+        'staking_deposit_contract_balance_eth': macro.get('staking_deposit_contract_balance_eth'),
+        'beacon_withdrawn_total_eth': macro.get('beacon_withdrawn_total_eth'),
+        'staking_counters_observed_at': macro.get('staking_counters_observed_at'),
+    }
+    available_staking = {k: v for k, v in etherscan_staking.items() if v is not None}
+    if available_staking:
+        structural.update({k: v for k, v in available_staking.items() if structural.get(k) is None})
+        sources=[x for x in (structural.get('_source'), 'Etherscan: Beacon deposit contract balance + WithdrawnTotal') if x]
+        structural['_source']=' + '.join(dict.fromkeys(sources))
+        if available_staking.get('staking_counters_observed_at'):
+            structural['_observed_at']=max(
+                x for x in (structural.get('_observed_at'), available_staking['staking_counters_observed_at']) if x
+            )
+        ext['structural']=structural
     for key in ('valuation','capital_flow','structural'):
         payload = ext.get(key) or {}
         stamps[key]={

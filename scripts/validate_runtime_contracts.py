@@ -46,6 +46,46 @@ def validate_runtime_contracts() -> dict:
     farside = _farside_eth_etf_state().get("capital_flow") or {}
     checks.append(_result("farside-etf", required=False, ok=farside.get("etf_flow_usd") is not None, detail=farside.get("_error") or farside.get("_source")))
 
+
+    etherscan_key = os.getenv("ETHERSCAN_API_KEY")
+    if etherscan_key:
+        try:
+            base = "https://api.etherscan.io/v2/api"
+            supply = requests.get(
+                base,
+                params={"chainid": "1", "module": "stats", "action": "ethsupply2", "apikey": etherscan_key},
+                timeout=20,
+            )
+            balance = requests.get(
+                base,
+                params={
+                    "chainid": "1", "module": "account", "action": "balance",
+                    "address": "0x00000000219ab540356cBB839Cbe05303d7705Fa",
+                    "tag": "latest", "apikey": etherscan_key,
+                },
+                timeout=20,
+            )
+            supply_body = supply.json() if supply.ok else {}
+            balance_body = balance.json() if balance.ok else {}
+            result = supply_body.get("result") if isinstance(supply_body.get("result"), dict) else {}
+            ok = bool(
+                supply.ok and balance.ok
+                and result.get("WithdrawnTotal") is not None
+                and balance_body.get("status") == "1"
+                and balance_body.get("result") is not None
+            )
+            checks.append(_result(
+                "etherscan-staking-counters", required=False, ok=ok,
+                detail={
+                    "withdrawn_total": result.get("WithdrawnTotal") is not None,
+                    "deposit_contract_balance": balance_body.get("status") == "1" and balance_body.get("result") is not None,
+                },
+            ))
+        except Exception as exc:
+            checks.append(_result("etherscan-staking-counters", required=False, ok=False, detail=type(exc).__name__))
+    else:
+        checks.append(_result("etherscan-staking-counters", required=False, ok=True, status="SKIPPED_NOT_CONFIGURED", detail=None))
+
     if os.getenv("DUNE_API_KEY"):
         dune = _dune_execute("SELECT 1 AS ok")
         checks.append(_result("dune", required=False, ok=not bool(dune.get("_error")), detail=dune.get("_error") or "query-complete"))

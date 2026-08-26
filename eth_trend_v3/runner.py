@@ -29,6 +29,7 @@ from .model_state import current_model_state
 from .runtime_model import frozen_inference
 from .production_control import evaluate_runtime_demotion
 from .shadow_forecast import new_shadow_record, persist_shadow
+from .structural_flow import enrich_staking_netflow
 
 OUTPUT = Path(core.OUTPUT_DIR)
 
@@ -192,6 +193,8 @@ def _persist_production_forecasts(payload: dict, *, pit_snapshot_id: str) -> lis
 def run_one(timeframe, history_records):
     ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     raw = collect(timeframe)
+    if timeframe == "4h":
+        raw = enrich_staking_netflow(raw, history_records)
     factors = all_factors(raw)
     result = evaluate(timeframe, raw, factors, ts)
 
