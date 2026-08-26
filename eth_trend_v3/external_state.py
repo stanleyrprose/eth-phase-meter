@@ -11,6 +11,8 @@ COINMETRICS_COMMUNITY_URL = "https://community-api.coinmetrics.io/v4/timeseries/
 DEFILLAMA_ETH_STABLECOIN_URL = "https://stablecoins.llama.fi/stablecoincharts/Ethereum"
 FARSIDE_ETH_ETF_URL = "https://farside.co.uk/eth/"
 JINA_FARSIDE_ETH_ETF_URL = "https://r.jina.ai/https://farside.co.uk/eth/"
+BEACONCHAIN_QUEUES_URL = "https://beaconcha.in/validators/queues"
+JINA_BEACONCHAIN_QUEUES_URL = "https://r.jina.ai/https://beaconcha.in/validators/queues"
 
 DUNE_EXECUTE_URL = "https://api.dune.com/api/v1/sql/execute"
 DUNE_RESULT_URL = "https://api.dune.com/api/v1/execution/{execution_id}/results"
@@ -364,6 +366,79 @@ def _defillama_stablecoin_state() -> dict:
         return {"capital_flow": {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "DefiLlama"}}
 
 
+
+def _extract_eth_queue_value(text: str, label: str):
+    pattern = rf"([0-9][0-9,]*(?:\.[0-9]+)?)\s*ETH\s*\n+\s*{re.escape(label)}"
+    match = re.search(pattern, text or "", flags=re.IGNORECASE)
+    if not match:
+        return None
+    return _float(match.group(1).replace(",", ""))
+
+
+def _beaconchain_queue_state() -> dict:
+    """Credential-free staking pressure from beaconcha.in Validator Queues.
+
+    This is a queue snapshot, not realized staking flow. Positive imbalance means
+    more ETH is waiting to enter validator staking than is waiting to exit/withdraw.
+    """
+    headers = {"User-Agent": "eth-phase-meter/1.0 (+https://github.com/stanleyrprose/eth-phase-meter)"}
+    direct_error = None
+    text = None
+    source = None
+    try:
+        direct = requests.get(BEACONCHAIN_QUEUES_URL, headers=headers, timeout=20)
+        if direct.ok and "Pending Deposit Value" in direct.text:
+            text = html.unescape(re.sub(r"<[^>]+>", "\n", direct.text))
+            source = "beaconcha.in Validator Queues"
+        else:
+            direct_error = f"http={direct.status_code}"
+    except requests.RequestException as exc:
+        direct_error = type(exc).__name__
+
+    if text is None:
+        try:
+            proxy = requests.get(JINA_BEACONCHAIN_QUEUES_URL, headers=headers, timeout=30)
+            if not proxy.ok:
+                err = _safe_http_error(proxy, "BEACONCHAIN_JINA_HTTP_ERROR")
+                err["message"] = f"direct={direct_error}; proxy={err.get('message')}"[:300]
+                err["_source"] = "beaconcha.in via Jina Reader"
+                return {"structural": err}
+            text = proxy.text
+            source = "beaconcha.in Validator Queues via Jina Reader"
+        except requests.RequestException as exc:
+            return {
+                "structural": {
+                    "_error": type(exc).__name__,
+                    "message": f"direct={direct_error}; proxy={str(exc)[:180]}"[:300],
+                    "_source": "beaconcha.in via Jina Reader",
+                }
+            }
+
+    pending_deposit = _extract_eth_queue_value(text, "Pending Deposit Value")
+    withdrawal_backlog = _extract_eth_queue_value(text, "Total Withdrawal/Outflow Value (Context)")
+    if withdrawal_backlog is None:
+        withdrawal_backlog = _extract_eth_queue_value(text, "Total Withdrawal/Outflow Value")
+    if pending_deposit is None or withdrawal_backlog is None:
+        return {
+            "structural": {
+                "_error": "BEACONCHAIN_QUEUE_PARSE_ERROR",
+                "message": f"deposit={pending_deposit}; withdrawal={withdrawal_backlog}",
+                "_source": source,
+            }
+        }
+    total = pending_deposit + withdrawal_backlog
+    imbalance = ((pending_deposit - withdrawal_backlog) / total * 100.0) if total > 0 else None
+    return {
+        "structural": {
+            "staking_pending_deposit_eth": pending_deposit,
+            "staking_withdrawal_outflow_backlog_eth": withdrawal_backlog,
+            "staking_queue_net_eth": pending_deposit - withdrawal_backlog,
+            "staking_queue_imbalance_pct": imbalance,
+            "_source": source,
+            "_observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    }
+
 def _dune_execute(sql: str, timeout_seconds: int = 50) -> dict:
     api_key = os.getenv("DUNE_API_KEY")
     if not api_key:
@@ -481,6 +556,7 @@ def collect_external_state() -> dict:
     cm = _coinmetrics_community_state()
     llama = _defillama_stablecoin_state()
     farside = _farside_eth_etf_state()
+    beacon_queue = _beaconchain_queue_state()
     result = {
         "valuation": dict(cm.get("valuation") or {}),
         "capital_flow": {},
@@ -497,6 +573,9 @@ def collect_external_state() -> dict:
     )
     result["structural"] = _merge_dimension(
         result["structural"], cm.get("structural") or {}, "coinmetrics"
+    )
+    result["structural"] = _merge_dimension(
+        result["structural"], beacon_queue.get("structural") or {}, "beaconchain-queues"
     )
 
     if os.getenv("DUNE_API_KEY"):

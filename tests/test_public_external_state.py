@@ -113,5 +113,30 @@ class TestPublicExternalState(unittest.TestCase):
         self.assertIn("DefiLlama", flow["_source"])
 
 
+    @patch("eth_trend_v3.external_state.requests.get")
+    def test_beaconchain_queue_uses_public_page_and_keeps_queue_semantics_distinct(self, get):
+        direct = Mock(ok=False, status_code=403, text="cloudflare")
+        proxy = Mock(ok=True)
+        proxy.text = """
+        32,190
+
+        Requests
+
+        2,205,687 ETH
+
+        Pending Deposit Value
+
+        116,795 ETH
+
+        Total Withdrawal/Outflow Value (Context)
+        """
+        get.side_effect = [direct, proxy]
+        structural = external_state._beaconchain_queue_state()["structural"]
+        self.assertEqual(structural["staking_pending_deposit_eth"], 2_205_687.0)
+        self.assertEqual(structural["staking_withdrawal_outflow_backlog_eth"], 116_795.0)
+        self.assertAlmostEqual(structural["staking_queue_imbalance_pct"], 89.94222560174848)
+        self.assertNotIn("staking_netflow_eth", structural)
+        self.assertIn("beaconcha.in", structural["_source"])
+
 if __name__ == "__main__":
     unittest.main()

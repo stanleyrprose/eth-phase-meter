@@ -1438,15 +1438,43 @@ def fetch_etherscan_onchain():
             res = data2["result"]
             # 单位 wei → ETH
             eth_supply = float(res.get("EthSupply", 0)) / 1e18
-            eth2_staking = float(res.get("Eth2Staking", 0)) / 1e18
-            burnt = float(res.get("BurntFees", 0)) / 1e18
+            # Etherscan documents Eth2Staking as cumulative ETH2 staking *rewards*,
+            # not active stake. Keep the legacy alias for compatibility but do not
+            # derive a staking ratio from it.
+            eth2_staking_rewards = float(res["Eth2Staking"]) / 1e18 if res.get("Eth2Staking") is not None else None
+            burnt = float(res["BurntFees"]) / 1e18 if res.get("BurntFees") is not None else None
+            withdrawn_total = float(res["WithdrawnTotal"]) / 1e18 if res.get("WithdrawnTotal") is not None else None
             result["eth_supply"] = eth_supply
-            result["eth2_staking"] = eth2_staking
-            result["eth_burnt"] = burnt
-            if eth_supply > 0:
-                result["staking_ratio"] = eth2_staking / eth_supply
+            if eth2_staking_rewards is not None:
+                result["eth2_staking"] = eth2_staking_rewards
+                result["eth2_staking_rewards"] = eth2_staking_rewards
+            if burnt is not None:
+                result["eth_burnt"] = burnt
+            if withdrawn_total is not None:
+                result["beacon_withdrawn_total_eth"] = withdrawn_total
     except Exception as e:
         print(f"  [WARN] Etherscan Supply 失败: {e}")
+
+    try:
+        # Mainnet Beacon deposit contract balance. The contract is deposit-only;
+        # its cumulative balance provides a cheap point-in-time counter for ETH
+        # entering validator staking without scanning every block.
+        params3 = {
+            "chainid": "1",
+            "module": "account",
+            "action": "balance",
+            "address": "0x00000000219ab540356cBB839Cbe05303d7705Fa",
+            "tag": "latest",
+            "apikey": ETHERSCAN_API_KEY,
+        }
+        r3 = SESSION.get(base_url, params=params3, timeout=15)
+        r3.raise_for_status()
+        data3 = r3.json()
+        if data3.get("status") == "1" and data3.get("result") is not None:
+            result["staking_deposit_contract_balance_eth"] = float(data3["result"]) / 1e18
+            result["staking_counters_observed_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    except Exception as e:
+        print(f"  [WARN] Etherscan Deposit Contract Balance 失败: {e}")
 
     return result if result else None
 
@@ -1787,11 +1815,10 @@ def score_macro(macro):
     else:
         details["Gas Price(Etherscan)"] = "N/A"
 
-    # Staking ratio（参考，不计分）
-    staking_ratio = macro.get("staking_ratio")
-    eth2_staking = macro.get("eth2_staking")
-    if staking_ratio is not None and eth2_staking is not None:
-        details["ETH质押率"] = f"{staking_ratio:.1%} ({eth2_staking/1e6:.2f}M ETH)"
+    # Etherscan Eth2Staking is cumulative staking rewards, not active-stake ratio.
+    staking_rewards = macro.get("eth2_staking_rewards", macro.get("eth2_staking"))
+    if staking_rewards is not None:
+        details["ETH2累计质押奖励"] = f"{staking_rewards/1e6:.2f}M ETH"
 
     onchain_score = clamp(onchain_score, -2, 2)
     score += onchain_score

@@ -60,11 +60,16 @@ def build_market_state(raw: dict, result) -> dict:
     structural_raw = raw.get("structural") or {}
     svals = []
     staking = _num(structural_raw, "staking_netflow_eth", "staking_netflow")
+    staking_queue = _num(structural_raw, "staking_queue_imbalance_pct")
     issuance = _num(structural_raw, "net_issuance_eth", "net_issuance")
     exchange_balance = _num(structural_raw, "exchange_balance_change_pct")
     bridge = _num(structural_raw, "l2_bridge_netflow_eth", "bridge_netflow")
     if staking is not None:
         svals.append(_clip(staking / 50_000 * 100))
+    elif staking_queue is not None:
+        # Queue imbalance is a forward staking-pressure proxy, not realized flow.
+        # It occupies the same staking-evidence slot only when realized flow is absent.
+        svals.append(_clip(staking_queue))
     if issuance is not None:
         svals.append(_clip(-issuance / 20_000 * 100))
     if exchange_balance is not None:
@@ -78,7 +83,7 @@ def build_market_state(raw: dict, result) -> dict:
         "valuation": StateDimension("Valuation", valuation, 100 * len(vals) / 3, "positive=cheap/supportive; negative=expensive", valuation_raw),
         "capital_flow": StateDimension("Capital Flow", capital_flow, 100 * len(fvals) / 4, "positive=net capital support", flow_raw),
         "crowding": StateDimension("Leverage / Crowding", float(result.crowding), 100, "0=uncrowded, 100=extremely crowded", {}),
-        "structural_supply": StateDimension("Structural Supply", structural, 100 * len(svals) / 4, "positive=tighter liquid supply", structural_raw),
+        "structural_supply": StateDimension("Structural Supply", structural, 100 * len(svals) / 4, "positive=tighter liquid supply or stronger pending staking pressure", structural_raw),
         "volatility_risk": StateDimension("Volatility / Risk", float(result.volatility), 100, "0=normal risk, 100=extreme volatility risk", {}),
     }
     available = [d for d in dimensions.values() if d.score is not None]
