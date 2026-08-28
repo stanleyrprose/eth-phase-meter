@@ -80,6 +80,21 @@ def feature_row(record:dict)->dict|None:
     if not isinstance(price,(int,float)) or price<=0: return None
     regime_name=(record.get('regime') or {}).get('regime')
     row={"timestamp":record.get("observed_at") or record.get("event_time"),"price":float(price),"coverage":float(record.get("coverage") or 0),"timeframe":mv.get("timeframe"),"regime_code":REGIME_CODE.get(regime_name)}
+    versions=dict(state.get("dimension_versions") or {})
+    defaults={
+        "trend":"trend-v1",
+        "valuation":"valuation-v1",
+        "capital_flow":"capital-flow-v1",
+        "crowding":"crowding-v1",
+        "structural_supply":"structural-supply-v1",
+        "volatility_risk":"volatility-risk-v1",
+    }
+    structural_components=(dims.get("structural_supply") or {}).get("components") or {}
+    if "structural_supply" not in versions and "staking_queue_imbalance_pct" in structural_components:
+        versions["structural_supply"]="structural-supply-v2-staking-queue"
+    for key,version in defaults.items():
+        versions.setdefault(key,version)
+    row["_dimension_versions"]=versions
     for k in ("trend","valuation","capital_flow","crowding","structural_supply","volatility_risk"):
         v=(dims.get(k) or {}).get("score"); row[k]=float(v) if isinstance(v,(int,float)) else None
     for k,v in (record.get("feature_clusters") or {}).items():

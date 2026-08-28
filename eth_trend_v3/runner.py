@@ -15,7 +15,7 @@ from .feature_cluster import cluster_factors
 from .feature_metadata import enrich_factor_metadata
 from .market_state import build_market_state
 from .data_health import assess as assess_data_health
-from .dataset import HORIZONS, REGIME_CODE, load_pit_records, build_labeled_rows, feature_row
+from .dataset import HORIZONS, REGIME_CODE, load_pit_records, build_labeled_rows, feature_row, canonicalize_pit_records
 from .forecast import fit_live_probability
 from .calibration import reliability_from_metrics, probability_state
 from .regime import deterministic
@@ -224,9 +224,14 @@ def run_one(timeframe, history_records):
         model_reliability = "Low"
 
     current_row = _current_features(market_state, regime)
-    historical_rows = [feature_row(r) for r in history_records]
+    drift_records = canonicalize_pit_records(history_records, timeframe=timeframe)
+    historical_rows = [feature_row(r) for r in drift_records]
     historical_rows = [r for r in historical_rows if r]
-    feature_drift = detect_feature_drift(historical_rows, current_row)
+    feature_drift = detect_feature_drift(
+        historical_rows,
+        current_row,
+        current_versions=market_state.get("dimension_versions") or {},
+    )
     model_health = assess_model_health(feature_drift, forecasts, regime)
     forecasts = _fail_closed_unreliable_forecasts(forecasts, model_health)
     if model_health.get("status") == "MODEL_UNRELIABLE":

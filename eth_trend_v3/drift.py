@@ -2,7 +2,7 @@ from __future__ import annotations
 import numpy as np
 
 
-def detect_feature_drift(history, current, keys=None):
+def detect_feature_drift(history, current, keys=None, current_versions=None):
     keys = keys or [
         "trend",
         "valuation",
@@ -13,8 +13,17 @@ def detect_feature_drift(history, current, keys=None):
     ]
     flags = []
     for key in keys:
+        current_version = (current_versions or {}).get(key)
         vals = np.asarray(
-            [r.get(key) for r in history[-180:] if isinstance(r.get(key), (int, float))],
+            [
+                r.get(key)
+                for r in history[-180:]
+                if isinstance(r.get(key), (int, float))
+                and (
+                    current_version is None
+                    or (r.get("_dimension_versions") or {}).get(key) == current_version
+                )
+            ],
             dtype=float,
         )
         value = current.get(key)
@@ -24,7 +33,12 @@ def detect_feature_drift(history, current, keys=None):
         mad = float(np.median(np.abs(vals - median))) or 1.0
         robust_z = abs((float(value) - median) / (1.4826 * mad))
         if robust_z > 4:
-            flags.append({"feature": key, "robust_z": round(robust_z, 2)})
+            flags.append({
+                "feature": key,
+                "feature_version": current_version,
+                "baseline_n": int(len(vals)),
+                "robust_z": round(robust_z, 2),
+            })
     return {"status": "MODEL_DEGRADED" if flags else "NORMAL", "flags": flags}
 
 

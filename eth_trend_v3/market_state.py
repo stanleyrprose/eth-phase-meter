@@ -2,6 +2,15 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Any
 
+DIMENSION_SCHEMA_VERSIONS = {
+    "trend": "trend-v1",
+    "valuation": "valuation-v1",
+    "capital_flow": "capital-flow-v1",
+    "crowding": "crowding-v1",
+    "structural_supply": "structural-supply-v2-staking-queue",
+    "volatility_risk": "volatility-risk-v1",
+}
+
 @dataclass
 class StateDimension:
     name: str
@@ -89,6 +98,7 @@ def build_market_state(raw: dict, result) -> dict:
     available = [d for d in dimensions.values() if d.score is not None]
     return {
         "dimensions": {k: v.to_dict() for k, v in dimensions.items()},
+        "dimension_versions": dict(DIMENSION_SCHEMA_VERSIONS),
         "available_dimensions": len(available),
         "dimension_coverage": round(100 * len(available) / 6, 1),
     }
