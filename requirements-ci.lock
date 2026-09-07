@@ -64,6 +64,8 @@ pycparser==3.0
     # via cffi
 pygments==2.21.0
     # via pytest
+pysocks==1.7.1
+    # via -r requirements.txt
 pytest==9.1.1
     # via -r requirements-ci.in
 python-dateutil==2.9.0.post0

@@ -41,6 +41,7 @@ from openpyxl.utils import get_column_letter
 
 BINANCE_BASE = "https://api.binance.com"
 BINANCE_FAPI = "https://fapi.binance.com"
+BINANCE_PROXY_URL = os.environ.get("BINANCE_PROXY_URL", "").strip()
 DERIBIT_BASE = "https://www.deribit.com/api/v2"
 FNG_API = "https://api.alternative.me/fng/"
 
@@ -64,10 +65,18 @@ SESSION.headers.update({"User-Agent": "ETH-Phase-Meter/1.0"})
 # ─────────────────────────── 工具函数 ───────────────────────────
 
 
+def _binance_proxy_for(url: str):
+    if not BINANCE_PROXY_URL:
+        return None
+    if url.startswith(f"{BINANCE_BASE}/") or url.startswith(f"{BINANCE_FAPI}/"):
+        return {"http": BINANCE_PROXY_URL, "https": BINANCE_PROXY_URL}
+    return None
+
+
 def safe_get(url, params=None, timeout=15):
     """安全 GET 请求, 失败返回 None"""
     try:
-        r = SESSION.get(url, params=params, timeout=timeout)
+        r = SESSION.get(url, params=params, timeout=timeout, proxies=_binance_proxy_for(url))
         r.raise_for_status()
         return r.json()
     except Exception as e:

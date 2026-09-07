@@ -31,6 +31,7 @@ jobs:
       ETH_FLOW_API_TOKEN: ${{ secrets.ETH_FLOW_API_TOKEN }}
       ETH_STRUCTURAL_API_URL: ${{ secrets.ETH_STRUCTURAL_API_URL }}
       ETH_STRUCTURAL_API_TOKEN: ${{ secrets.ETH_STRUCTURAL_API_TOKEN }}
+      BINANCE_EGRESS_SSH_KEY: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
       ETH_FILTER_1H_BY_4H: "1"
 
     steps:
@@ -60,6 +61,41 @@ jobs:
           else
             echo "OK: native Dune collector configured."
           fi
+      - name: Start Binance BKK egress
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [[ -z "$BINANCE_EGRESS_SSH_KEY" ]]; then
+            echo "WARNING: BINANCE_EGRESS_SSH_KEY not configured; Binance will use direct runner egress and may fall back to Deribit."
+            exit 1
+          fi
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$BINANCE_EGRESS_SSH_KEY" > "$HOME/.ssh/binance_egress"
+          chmod 600 "$HOME/.ssh/binance_egress"
+          cp config/binance_egress_known_hosts "$HOME/.ssh/binance_egress_known_hosts"
+          ssh -fNT \
+            -D 127.0.0.1:19080 \
+            -i "$HOME/.ssh/binance_egress" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/binance_egress_known_hosts" \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=30 \
+            root@43.133.101.242
+          python - <<'PY'
+          import requests
+
+          proxy = "socks5h://127.0.0.1:19080"
+          proxies = {"http": proxy, "https": proxy}
+          for url in (
+              "https://api.binance.com/api/v3/ping",
+              "https://fapi.binance.com/fapi/v1/ping",
+          ):
+              response = requests.get(url, proxies=proxies, timeout=10)
+              response.raise_for_status()
+              print(f"OK: Binance BKK egress {url} -> HTTP {response.status_code}")
+          PY
+          echo "BINANCE_PROXY_URL=socks5h://127.0.0.1:19080" >> "$GITHUB_ENV"
       - name: Apply versioned migrations
         run: python -m scripts.apply_migrations
       - name: Restore non-authoritative convenience cache

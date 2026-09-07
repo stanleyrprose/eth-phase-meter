@@ -11,6 +11,10 @@ For authoritative PIT history and future probability calibration:
 
 - `DATABASE_URL` — PostgreSQL DSN
 
+For Binance market-data egress from GitHub-hosted runners:
+
+- `BINANCE_EGRESS_SSH_KEY` — dedicated forwarding-only SSH private key for the Bangkok VPS. The matching server key is restricted to `api.binance.com:443` and `fapi.binance.com:443`; it cannot execute shell commands. If the tunnel cannot be established, the monitor continues without `BINANCE_PROXY_URL` and existing provider fallbacks remain active.
+
 Optional existing providers:
 
 - `FRED_API_KEY`
