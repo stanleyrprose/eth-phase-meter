@@ -1,12 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Any
+from .engine import crowding_coverage
 
 DIMENSION_SCHEMA_VERSIONS = {
     "trend": "trend-v1",
     "valuation": "valuation-v1",
     "capital_flow": "capital-flow-v1",
-    "crowding": "crowding-v1",
+    "crowding": "crowding-v2-dte48",
     "structural_supply": "structural-supply-v2-staking-queue",
     "volatility_risk": "volatility-risk-v1",
 }
@@ -91,7 +92,7 @@ def build_market_state(raw: dict, result) -> dict:
         "trend": StateDimension("Trend", trend, float(tech.get("coverage", 0)), "price trend and momentum strength", {"technical_family": tech}),
         "valuation": StateDimension("Valuation", valuation, 100 * len(vals) / 3, "positive=cheap/supportive; negative=expensive", valuation_raw),
         "capital_flow": StateDimension("Capital Flow", capital_flow, 100 * len(fvals) / 4, "positive=net capital support", flow_raw),
-        "crowding": StateDimension("Leverage / Crowding", float(result.crowding), 100, "0=uncrowded, 100=extremely crowded", {}),
+        "crowding": StateDimension("Leverage / Crowding", float(result.crowding), crowding_coverage(raw), "0=uncrowded, 100=extremely crowded", {}),
         "structural_supply": StateDimension("Structural Supply", structural, 100 * len(svals) / 4, "positive=tighter liquid supply or stronger pending staking pressure", structural_raw),
         "volatility_risk": StateDimension("Volatility / Risk", float(result.volatility), 100, "0=normal risk, 100=extreme volatility risk", {}),
     }
