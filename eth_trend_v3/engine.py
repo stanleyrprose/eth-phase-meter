@@ -5,16 +5,27 @@ import eth_phase_meter as core
 from .quality import summarize_factors
 from .models import SnapshotResult
 
-def crowding(raw: dict) -> int:
-    df,d,o,s=raw['candles'],raw['derivatives'],raw['options'],raw['sentiment']; z=[]
+def crowding_components(raw: dict) -> list[tuple[float, int]]:
+    df=raw.get('candles'); d=raw.get('derivatives') or {}; o=raw.get('options') or {}; s=raw.get('sentiment') or {}; z=[]
     if df is not None and len(df)>=30: z.append((max(0,(abs(float(core.calc_rsi(df.close).iloc[-1])-50)-15)/25),15))
     if d.get('funding_percentile') is not None: z.append((abs(float(d['funding_percentile'])-.5)*2,25))
     elif d.get('funding_rate') is not None: z.append((min(1,abs(float(d['funding_rate']))/.001),15))
     if d.get('long_short_ratio') is not None: z.append((min(1,abs(np.log(max(float(d['long_short_ratio']),1e-6)))/np.log(2.5)),15))
     if s.get('fng_value') is not None: z.append((max(0,(abs(float(s['fng_value'])-50)-20)/30),15))
     if o.get('put_call_oi_ratio') is not None: z.append((min(1,abs(float(o['put_call_oi_ratio'])-.8)/.8),10))
-    if o.get('iv_skew_25d_proxy_near') is not None: z.append((min(1,abs(float(o['iv_skew_25d_proxy_near']))/12),20))
+    if o.get('crowding_iv_skew_proxy') is not None: z.append((min(1,abs(float(o['crowding_iv_skew_proxy']))/12),20))
+    return z
+
+
+def crowding(raw: dict) -> int:
+    z=crowding_components(raw)
     return round(100*sum(v*w for v,w in z)/sum(w for _,w in z)) if z else 0
+
+
+def crowding_coverage(raw: dict) -> float:
+    # Nominal crowding evidence totals 100 when funding percentile is available.
+    # Absolute funding fallback intentionally contributes only 15/25 of that slot.
+    return round(min(100.0, sum(w for _,w in crowding_components(raw))), 1)
 
 def volatility(raw: dict) -> int:
     df,o,x=raw['candles'],raw['options'],raw['macro']; z=[]

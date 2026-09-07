@@ -643,6 +643,21 @@ def score_derivatives(deriv):
 #  第二维度: 期权结构 (满分 ±25)
 # ═══════════════════════════════════════════════════════════════
 
+CROWDING_OPTION_MIN_DTE_HOURS = 48
+
+
+def _select_stable_option_expiries(sorted_expiries, now, min_dte_hours=CROWDING_OPTION_MIN_DTE_HOURS):
+    """Exclude very short-dated expiries whose smile/skew can jump around expiry roll."""
+    cutoff_seconds = float(min_dte_hours) * 3600
+    stable = []
+    for exp_dt, exp_str in sorted_expiries:
+        # Deribit option names encode only the calendar date; contracts expire
+        # at 08:00 UTC, so restore that settlement hour before checking DTE.
+        expiry_at = exp_dt.replace(hour=8, minute=0, second=0, microsecond=0)
+        if (expiry_at - now).total_seconds() >= cutoff_seconds:
+            stable.append((expiry_at, exp_str))
+    return stable
+
 
 def fetch_deribit_options():
     """从 Deribit 获取 ETH 期权数据"""
@@ -723,6 +738,8 @@ def fetch_deribit_options():
         if exp_dt and exp_dt > now:
             sorted_expiries.append((exp_dt, exp_str))
     sorted_expiries.sort(key=lambda x: x[0])
+    stable_expiries = _select_stable_option_expiries(sorted_expiries, now)
+    result["crowding_option_min_dte_hours"] = CROWDING_OPTION_MIN_DTE_HOURS
 
     def find_atm_iv(exp_str):
         """找指定到期日中最接近 spot 的行权价的 ATM IV (call+put 平均)"""
@@ -784,6 +801,23 @@ def fetch_deribit_options():
         tops = top_oi_strikes(near_exp, topn=3)
         if tops:
             result["oi_top_strikes_near"] = tops
+
+    # Crowding uses a separate, more stable skew contract: ignore expiries <48h.
+    # Keep the legacy nearest-expiry option fields above unchanged for other models.
+    if spot and stable_expiries:
+        crowding_dt, crowding_exp = stable_expiries[0]
+        put_target = spot * 0.90
+        call_target = spot * 1.10
+        crowding_put_iv, crowding_put_k = find_iv_near_strike(crowding_exp, put_target, "P")
+        crowding_call_iv, crowding_call_k = find_iv_near_strike(crowding_exp, call_target, "C")
+        result["crowding_skew_expiry"] = crowding_exp
+        result["crowding_skew_dte_hours"] = round((crowding_dt - now).total_seconds() / 3600, 1)
+        result["crowding_otm_put_iv"] = crowding_put_iv
+        result["crowding_otm_put_strike"] = crowding_put_k
+        result["crowding_otm_call_iv"] = crowding_call_iv
+        result["crowding_otm_call_strike"] = crowding_call_k
+        if crowding_put_iv and crowding_call_iv:
+            result["crowding_iv_skew_proxy"] = crowding_put_iv - crowding_call_iv
 
     if len(sorted_expiries) >= 2:
         next_exp = sorted_expiries[1][1]
