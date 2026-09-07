@@ -56,6 +56,8 @@ psycopg-binary==3.3.4
     # via psycopg
 pycparser==3.0
     # via cffi
+pysocks==1.7.1
+    # via -r requirements.txt
 python-dateutil==2.9.0.post0
     # via pandas
 pytz==2026.3.post1
