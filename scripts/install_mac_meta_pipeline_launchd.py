@@ -36,6 +36,7 @@ def build_plist(
     python: str,
     gh: str,
     codex: str,
+    telegram_secret_file: Path,
     label: str = DEFAULT_LABEL,
     interval_seconds: int = DEFAULT_INTERVAL_SECONDS,
 ) -> dict:
@@ -62,6 +63,8 @@ def build_plist(
             str(tradingagents_repo),
             "--gh",
             gh,
+            "--telegram-secret-file",
+            str(telegram_secret_file),
         ],
         "WorkingDirectory": str(repo_root),
         "StartInterval": int(interval_seconds),
@@ -117,6 +120,11 @@ def main() -> int:
     parser.add_argument("--python", help="Python executable used to run the local bridge")
     parser.add_argument("--gh", help="GitHub CLI path")
     parser.add_argument("--codex", help="Codex CLI path; used to construct launchd PATH")
+    parser.add_argument(
+        "--telegram-secret-file",
+        default=str(Path.home() / ".eth-meta-pipeline" / "telegram.json"),
+        help="path only; secret contents are never copied into the plist",
+    )
     parser.add_argument("--label", default=DEFAULT_LABEL)
     parser.add_argument("--interval-seconds", type=int, default=DEFAULT_INTERVAL_SECONDS)
     parser.add_argument("--kickstart", action="store_true", help="run immediately after installation")
@@ -126,6 +134,7 @@ def main() -> int:
 
     repo_root = Path(__file__).resolve().parents[1]
     tradingagents_repo = Path(args.tradingagents_repo).expanduser().resolve()
+    telegram_secret_file = Path(args.telegram_secret_file).expanduser().resolve()
     plist_path = Path.home() / "Library" / "LaunchAgents" / f"{args.label}.plist"
 
     if args.uninstall:
@@ -150,6 +159,7 @@ def main() -> int:
         python=python,
         gh=gh,
         codex=codex,
+        telegram_secret_file=telegram_secret_file,
         label=args.label,
         interval_seconds=args.interval_seconds,
     )
