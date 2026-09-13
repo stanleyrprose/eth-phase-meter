@@ -8,8 +8,8 @@ from pathlib import Path
 import requests
 
 from eth_trend_v3.external_state import (
+    COINMETRICS_COMMUNITY_URL,
     _beaconchain_queue_state,
-    _coinmetrics_community_state,
     _defillama_stablecoin_state,
     _dune_execute,
     _farside_eth_etf_state,
@@ -25,6 +25,49 @@ def _result(name, *, required, ok, status=None, detail=None):
     }
 
 
+def _coinmetrics_recent_contract() -> tuple[bool, dict]:
+    """Validate recent CoinMetrics capability without requiring asynchronous metrics on one row."""
+    try:
+        response = requests.get(
+            COINMETRICS_COMMUNITY_URL,
+            params={
+                "assets": "eth",
+                "metrics": "CapMVRVCur,FlowInExNtv,FlowOutExNtv",
+                "frequency": "1d",
+                "page_size": 7,
+                "paging_from": "end",
+            },
+            timeout=20,
+        )
+        if not response.ok:
+            return False, {"http_status": response.status_code, "error": "COINMETRICS_HTTP_ERROR"}
+        rows = response.json().get("data") or []
+        rows = sorted(rows, key=lambda row: str(row.get("time") or ""))
+        mvrv_row = next(
+            (row for row in reversed(rows) if row.get("CapMVRVCur") not in (None, "")),
+            None,
+        )
+        flow_row = next(
+            (
+                row
+                for row in reversed(rows)
+                if row.get("FlowInExNtv") not in (None, "")
+                and row.get("FlowOutExNtv") not in (None, "")
+            ),
+            None,
+        )
+        ok = bool(mvrv_row and flow_row)
+        return ok, {
+            "latest_row": rows[-1].get("time") if rows else None,
+            "mvrv_observed_at": mvrv_row.get("time") if mvrv_row else None,
+            "exchange_flow_observed_at": flow_row.get("time") if flow_row else None,
+        }
+    except requests.RequestException as exc:
+        return False, {"error": type(exc).__name__, "message": str(exc)[:300]}
+    except Exception as exc:
+        return False, {"error": type(exc).__name__, "message": str(exc)[:300]}
+
+
 def validate_runtime_contracts() -> dict:
     checks = []
     try:
@@ -37,9 +80,8 @@ def validate_runtime_contracts() -> dict:
     except Exception as exc:
         checks.append(_result("deribit", required=True, ok=False, detail=type(exc).__name__))
 
-    cm = _coinmetrics_community_state()
-    cm_ok = bool((cm.get("valuation") or {}).get("mvrv") is not None and (cm.get("capital_flow") or {}).get("exchange_netflow_eth") is not None)
-    checks.append(_result("coinmetrics-community", required=True, ok=cm_ok, detail=(cm.get("valuation") or {}).get("_error")))
+    cm_ok, cm_detail = _coinmetrics_recent_contract()
+    checks.append(_result("coinmetrics-community", required=True, ok=cm_ok, detail=cm_detail))
 
     llama = _defillama_stablecoin_state().get("capital_flow") or {}
     checks.append(_result("defillama-stablecoin", required=True, ok=llama.get("stablecoin_supply_change_usd") is not None, detail=llama.get("_error")))
@@ -58,7 +100,6 @@ def validate_runtime_contracts() -> dict:
             "source": beacon_queue.get("_source"),
         },
     ))
-
 
     etherscan_key = os.getenv("ETHERSCAN_API_KEY")
     if etherscan_key:
