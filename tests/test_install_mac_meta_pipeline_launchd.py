@@ -48,5 +48,9 @@ def test_launchagent_print_plist_has_explicit_runtime_paths(tmp_path):
     assert payload["ProgramArguments"][secret_index + 1].endswith(".eth-meta-pipeline/telegram.json")
     assert "TG_BOT_TOKEN" not in payload["EnvironmentVariables"]
     assert "TG_CHAT_ID" not in payload["EnvironmentVariables"]
+    assert set(payload["EnvironmentVariables"]) == {"HOME", "PATH", "PYTHONUNBUFFERED"}
+    assert payload["EnvironmentVariables"]["PYTHONUNBUFFERED"] == "1"
     assert str(fake_bin) in payload["EnvironmentVariables"]["PATH"]
     assert payload["StandardOutPath"].endswith(".eth-meta-pipeline/launchd.stdout.log")
+    assert b"TG_BOT_TOKEN" not in completed.stdout
+    assert b"TG_CHAT_ID" not in completed.stdout
