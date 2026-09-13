@@ -20,9 +20,10 @@ def _load_components():
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     from eth_trend_v3.meta_decision import evaluate_meta_decision
+    from eth_trend_v3.meta_notification import process_meta_notification
     from eth_trend_v3.ta_trigger import evaluate_tradingagents_trigger
 
-    return evaluate_meta_decision, evaluate_tradingagents_trigger
+    return evaluate_meta_decision, evaluate_tradingagents_trigger, process_meta_notification
 
 
 def _read_json(path: Path) -> dict:
@@ -153,9 +154,14 @@ def main() -> int:
         help="use a local latest_monitor.json instead of downloading the latest successful GitHub artifact",
     )
     parser.add_argument("--force-ta", action="store_true", help="force a TradingAgents refresh after phase gates pass")
+    parser.add_argument(
+        "--telegram-secret-file",
+        default=str(Path.home() / ".eth-meta-pipeline" / "telegram.json"),
+        help="local Telegram credential JSON; TG_BOT_TOKEN/TG_CHAT_ID take precedence",
+    )
     args = parser.parse_args()
 
-    evaluate_meta_decision, evaluate_trigger = _load_components()
+    evaluate_meta_decision, evaluate_trigger, process_notification = _load_components()
     state_dir = Path(args.state_dir).expanduser().resolve()
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path = state_dir / "state.json"
@@ -226,6 +232,12 @@ def main() -> int:
         "ta_trigger_action": trigger["action"],
         "ta_trigger_reasons": trigger["reason_codes"],
     }
+    notification, last_notified = process_notification(
+        meta,
+        state,
+        secret_file=Path(args.telegram_secret_file).expanduser().resolve(),
+    )
+    meta["pipeline"]["notification"] = notification
     _write_json(meta_path, meta)
     _write_json(previous_monitor_path, monitor)
     state.update(
@@ -234,6 +246,8 @@ def main() -> int:
             "last_monitor_git_sha": run_sha,
             "last_pipeline_status": "OK",
             "last_meta_recommendation": meta["recommendation"],
+            "last_notified_recommendation": last_notified,
+            "last_notification": notification,
             "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         }
     )

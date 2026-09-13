@@ -43,6 +43,10 @@ def test_launchagent_print_plist_has_explicit_runtime_paths(tmp_path):
     assert payload["RunAtLoad"] is False
     assert payload["ProgramArguments"][0] == str(Path(sys.executable))
     assert "run_local_meta_pipeline.py" in payload["ProgramArguments"][1]
-    assert payload["ProgramArguments"][-1] == str(gh)
+    assert payload["ProgramArguments"][payload["ProgramArguments"].index("--gh") + 1] == str(gh)
+    secret_index = payload["ProgramArguments"].index("--telegram-secret-file")
+    assert payload["ProgramArguments"][secret_index + 1].endswith(".eth-meta-pipeline/telegram.json")
+    assert "TG_BOT_TOKEN" not in payload["EnvironmentVariables"]
+    assert "TG_CHAT_ID" not in payload["EnvironmentVariables"]
     assert str(fake_bin) in payload["EnvironmentVariables"]["PATH"]
     assert payload["StandardOutPath"].endswith(".eth-meta-pipeline/launchd.stdout.log")

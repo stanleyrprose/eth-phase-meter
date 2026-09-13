@@ -66,9 +66,29 @@ Files:
 - `tradingagents_trigger.json`: latest `eth-tradingagents-trigger-v1` contract.
 - `tradingagents_decision.json`: latest `tradingagents-decision-v1` contract.
 - `meta_decision.json`: latest `eth-meta-decision-v1` result.
+- `telegram.json`: optional local Telegram credentials (owner-readable only).
 - `launchd.stdout.log` / `launchd.stderr.log`: local scheduler logs.
 
 A failed TradingAgents execution does not mark the GitHub monitor run as processed, so a later scheduler invocation can retry the same source artifact.
+
+## Change-only Telegram notification
+
+The first Meta recommendation establishes a baseline without sending. Later runs send only when the recommendation differs from the last successfully notified recommendation. Telegram delivery is fail-open: a transient failure leaves the notification baseline unchanged for a later retry while the market-decision pipeline remains successful. If credentials are absent, the run records `SKIPPED_UNCONFIGURED` and advances the baseline so enabling Telegram later does not replay old changes.
+
+Environment variables `TG_BOT_TOKEN` and `TG_CHAT_ID` take precedence. For launchd, use the default local secret file and restrict it to the owner:
+
+```bash
+mkdir -p ~/.eth-meta-pipeline
+cat > ~/.eth-meta-pipeline/telegram.json <<'JSON'
+{
+  "bot_token": "<TELEGRAM_BOT_TOKEN>",
+  "chat_id": "<TELEGRAM_CHAT_ID>"
+}
+JSON
+chmod 600 ~/.eth-meta-pipeline/telegram.json
+```
+
+The installer places only the secret-file path in the plist; it never copies credentials into `EnvironmentVariables`. A present secret file with any group or other permission bits is rejected. Credential values are never printed.
 
 ## Manual run
 
