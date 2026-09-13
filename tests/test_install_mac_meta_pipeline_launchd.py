@@ -32,7 +32,7 @@ def test_launchagent_print_plist_has_explicit_runtime_paths(tmp_path):
     assert payload["Label"] == "com.stanley.eth-meta-pipeline"
     assert payload["StartInterval"] == 900
     assert payload["RunAtLoad"] is False
-    assert payload["ProgramArguments"][0] == str(Path(sys.executable).resolve())
+    assert payload["ProgramArguments"][0] == str(Path(sys.executable))
     assert "run_local_meta_pipeline.py" in payload["ProgramArguments"][1]
     assert payload["ProgramArguments"][-1] == "/opt/homebrew/bin/gh"
     assert "/opt/homebrew/bin" in payload["EnvironmentVariables"]["PATH"]
