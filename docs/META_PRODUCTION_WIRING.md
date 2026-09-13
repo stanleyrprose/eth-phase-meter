@@ -95,7 +95,7 @@ The installer places only the secret-file path in the plist; it never copies cre
 
 ```bash
 python scripts/run_local_meta_pipeline.py \
-  --tradingagents-repo /Users/xu/Documents/mcpx-projects/TradingAgents-codex-oauth
+  --tradingagents-repo ~/.openclaw/workspace/tools/eth-meta-runtime/TradingAgents
 ```
 
 The script uses `gh` to locate and download the latest successful `scheduled-monitor.yml` artifact. It exits immediately with `NO_NEW_MONITOR_RUN` when the same GitHub run was already processed.
@@ -104,18 +104,27 @@ Use `--force-ta` for a deliberate full TradingAgents refresh. This is an operato
 
 ## macOS LaunchAgent
 
-Production uses a clean `main` worktree, recommended path:
+Production uses clean runtime worktrees outside macOS TCC-protected user folders. The recommended layout is:
 
-`/Users/xu/Documents/mcpx-projects/eth-phase-meter-production`
+```text
+~/.openclaw/workspace/tools/eth-meta-runtime/
+├── eth-phase-meter/
+└── TradingAgents/
+```
+
+Real `launchd` A/B testing showed that background Python can hang before script execution when its script or repository is under `~/Documents`; macOS `tccd` logs corroborated TCC attribution. The installer therefore fails closed when either runtime repository is `~/Documents`, `~/Desktop`, `~/Downloads`, or any descendant. Development repositories may remain in `Documents`, but the `launchd` runtime worktrees must not.
 
 Install the 15-minute LaunchAgent from that worktree:
 
 ```bash
+cd ~/.openclaw/workspace/tools/eth-meta-runtime/eth-phase-meter
 /opt/anaconda3/bin/python scripts/install_mac_meta_pipeline_launchd.py \
-  --tradingagents-repo /Users/xu/Documents/mcpx-projects/TradingAgents-codex-oauth \
+  --tradingagents-repo ~/.openclaw/workspace/tools/eth-meta-runtime/TradingAgents \
   --gh /opt/homebrew/bin/gh \
   --codex /opt/homebrew/bin/codex
 ```
+
+The LaunchAgent installer defaults the TradingAgents runtime to `~/.openclaw/workspace/tools/eth-meta-runtime/TradingAgents`, so `--tradingagents-repo` may be omitted for this layout. Paths under `~/.openclaw`, `~/.local`, `~/Library`, and `/tmp` are not rejected by this TCC guard.
 
 The installer writes `~/Library/LaunchAgents/com.stanley.eth-meta-pipeline.plist`, explicitly sets `HOME`, a PATH containing the Python, GitHub CLI, and Codex CLI directories, and `PYTHONUNBUFFERED=1`, and schedules the bridge every 900 seconds. `RunAtLoad` is intentionally false so installation itself does not unexpectedly launch an expensive TradingAgents graph. Use `--kickstart` only when an immediate run is desired.
 
