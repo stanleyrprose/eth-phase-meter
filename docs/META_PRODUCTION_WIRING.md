@@ -66,6 +66,7 @@ Files:
 - `tradingagents_trigger.json`: latest `eth-tradingagents-trigger-v1` contract.
 - `tradingagents_decision.json`: latest `tradingagents-decision-v1` contract.
 - `meta_decision.json`: latest `eth-meta-decision-v1` result.
+- `launchd.stdout.log` / `launchd.stderr.log`: local scheduler logs.
 
 A failed TradingAgents execution does not mark the GitHub monitor run as processed, so a later scheduler invocation can retry the same source artifact.
 
@@ -80,11 +81,22 @@ The script uses `gh` to locate and download the latest successful `scheduled-mon
 
 Use `--force-ta` for a deliberate full TradingAgents refresh. This is an operator override for analysis refresh only; it does not enable trading execution.
 
-## Scheduling
+## macOS LaunchAgent
 
-Run the local bridge every 15 minutes. Polling the GitHub run list is cheap; TradingAgents itself still runs only on trigger events.
+Production uses a clean `main` worktree, recommended path:
 
-A macOS LaunchAgent is preferred over a second server/service because the OAuth-backed TradingAgents runtime already lives on the Mac mini. The LaunchAgent should call a clean `main` worktree of `eth-phase-meter`, not the dirty research worktree.
+`/Users/xu/Documents/mcpx-projects/eth-phase-meter-production`
+
+Install the 15-minute LaunchAgent from that worktree:
+
+```bash
+/opt/anaconda3/bin/python scripts/install_mac_meta_pipeline_launchd.py \
+  --tradingagents-repo /Users/xu/Documents/mcpx-projects/TradingAgents-codex-oauth \
+  --gh /opt/homebrew/bin/gh \
+  --codex /opt/homebrew/bin/codex
+```
+
+The installer writes `~/Library/LaunchAgents/com.stanley.eth-meta-pipeline.plist`, explicitly sets `HOME` and a PATH containing the Python, GitHub CLI, and Codex CLI directories, and schedules the bridge every 900 seconds. `RunAtLoad` is intentionally false so installation itself does not unexpectedly launch an expensive TradingAgents graph. Use `--kickstart` only when an immediate run is desired.
 
 ## Non-goals
 
