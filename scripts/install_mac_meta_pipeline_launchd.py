@@ -18,7 +18,15 @@ def _require_executable(explicit: str | None, name: str) -> str:
     candidate = explicit or shutil.which(name)
     if not candidate:
         raise RuntimeError(f"{name.upper()}_NOT_FOUND")
-    return str(Path(candidate).expanduser().resolve())
+    path = Path(candidate).expanduser()
+    if not path.is_absolute():
+        discovered = shutil.which(str(path))
+        if not discovered:
+            raise RuntimeError(f"{name.upper()}_NOT_FOUND")
+        path = Path(discovered)
+    if not path.exists():
+        raise RuntimeError(f"{name.upper()}_NOT_FOUND: {path}")
+    return str(path)
 
 
 def build_plist(
