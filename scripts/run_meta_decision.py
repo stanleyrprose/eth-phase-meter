@@ -3,9 +3,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-from eth_trend_v3.meta_decision import evaluate_meta_decision
+
+def _load_evaluator():
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from eth_trend_v3.meta_decision import evaluate_meta_decision
+
+    return evaluate_meta_decision
 
 
 def main() -> int:
@@ -37,6 +45,7 @@ def main() -> int:
 
     monitor = json.loads(Path(args.monitor).read_text(encoding="utf-8"))
     tradingagents = json.loads(Path(args.tradingagents).read_text(encoding="utf-8"))
+    evaluate_meta_decision = _load_evaluator()
     result = evaluate_meta_decision(
         monitor,
         tradingagents,
