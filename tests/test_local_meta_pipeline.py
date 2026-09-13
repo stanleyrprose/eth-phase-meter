@@ -124,6 +124,60 @@ def test_local_pipeline_unconfigured_change_syncs_notification_baseline(tmp_path
     assert state["last_notified_recommendation"] == "HOLD"
 
 
+def test_local_pipeline_migrates_same_meta_baseline_without_notification(tmp_path):
+    monitor_path = tmp_path / "incoming_monitor.json"
+    state_dir = tmp_path / "state"
+    monitor_path.write_text(json.dumps(_monitor()), encoding="utf-8")
+    state_dir.mkdir()
+    (state_dir / "latest_monitor.json").write_text(json.dumps(_monitor()), encoding="utf-8")
+    (state_dir / "tradingagents_decision.json").write_text(json.dumps(_decision()), encoding="utf-8")
+    (state_dir / "state.json").write_text(
+        json.dumps({"last_meta_recommendation": "HOLD"}),
+        encoding="utf-8",
+    )
+
+    completed = _run_pipeline(
+        "--monitor-file",
+        str(monitor_path),
+        "--state-dir",
+        str(state_dir),
+        "--telegram-secret-file",
+        str(tmp_path / "missing-telegram.json"),
+    )
+    assert completed.returncode == 0, completed.stderr
+    state = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["last_notification"]["status"] == "NO_CHANGE"
+    assert state["last_notification"]["previous_recommendation"] == "HOLD"
+    assert state["last_notified_recommendation"] == "HOLD"
+
+
+def test_local_pipeline_migrates_changed_meta_baseline_through_policy(tmp_path):
+    monitor_path = tmp_path / "incoming_monitor.json"
+    state_dir = tmp_path / "state"
+    monitor_path.write_text(json.dumps(_monitor()), encoding="utf-8")
+    state_dir.mkdir()
+    (state_dir / "latest_monitor.json").write_text(json.dumps(_monitor()), encoding="utf-8")
+    (state_dir / "tradingagents_decision.json").write_text(json.dumps(_decision()), encoding="utf-8")
+    (state_dir / "state.json").write_text(
+        json.dumps({"last_meta_recommendation": "REDUCE"}),
+        encoding="utf-8",
+    )
+
+    completed = _run_pipeline(
+        "--monitor-file",
+        str(monitor_path),
+        "--state-dir",
+        str(state_dir),
+        "--telegram-secret-file",
+        str(tmp_path / "missing-telegram.json"),
+    )
+    assert completed.returncode == 0, completed.stderr
+    state = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["last_notification"]["status"] == "SKIPPED_UNCONFIGURED"
+    assert state["last_notification"]["previous_recommendation"] == "REDUCE"
+    assert state["last_notified_recommendation"] == "HOLD"
+
+
 def test_local_pipeline_runs_tradingagents_when_contract_is_missing(tmp_path):
     monitor_path = tmp_path / "incoming_monitor.json"
     state_dir = tmp_path / "state"

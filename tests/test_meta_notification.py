@@ -58,6 +58,37 @@ def test_no_change_does_not_notify(tmp_path):
     assert calls == []
 
 
+def test_legacy_meta_baseline_same_value_does_not_notify(tmp_path):
+    calls = []
+    status, baseline = process_meta_notification(
+        _meta(),
+        {"last_meta_recommendation": "HOLD"},
+        secret_file=tmp_path / "missing.json",
+        environ=_configured_env(),
+        sender=lambda credentials, message: calls.append((credentials, message)),
+    )
+    assert status["status"] == "NO_CHANGE"
+    assert status["previous_recommendation"] == "HOLD"
+    assert baseline == "HOLD"
+    assert calls == []
+
+
+def test_legacy_meta_baseline_changed_value_notifies(tmp_path):
+    calls = []
+    status, baseline = process_meta_notification(
+        _meta("REDUCE"),
+        {"last_meta_recommendation": "HOLD"},
+        secret_file=tmp_path / "missing.json",
+        environ=_configured_env(),
+        sender=lambda credentials, message: calls.append((credentials, message)),
+    )
+    assert status["status"] == "SENT"
+    assert status["previous_recommendation"] == "HOLD"
+    assert baseline == "REDUCE"
+    assert len(calls) == 1
+    assert "HOLD → REDUCE" in calls[0][1]
+
+
 def test_change_success_advances_last_notified_and_formats_evidence(tmp_path):
     calls = []
     status, baseline = process_meta_notification(

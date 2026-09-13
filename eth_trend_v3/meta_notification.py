@@ -131,8 +131,15 @@ def process_meta_notification(
 ) -> tuple[dict, str | None]:
     """Evaluate and perform notification, returning status and the new durable baseline."""
     current = str(meta.get("recommendation") or "UNKNOWN")
-    has_baseline = "last_notified_recommendation" in state
-    previous_value = state.get("last_notified_recommendation")
+    if "last_notified_recommendation" in state:
+        previous_value = state.get("last_notified_recommendation")
+        has_baseline = True
+    elif "last_meta_recommendation" in state:
+        previous_value = state.get("last_meta_recommendation")
+        has_baseline = True
+    else:
+        previous_value = None
+        has_baseline = False
     previous = str(previous_value) if previous_value is not None else None
     action = notification_action(current, previous, has_baseline=has_baseline)
     status = {
