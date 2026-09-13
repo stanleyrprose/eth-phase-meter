@@ -252,7 +252,7 @@ def evaluate_meta_decision(
                     "timestamp": one_hour.get("timestamp"),
                     "direction": d1,
                     "coverage": _number(one_hour.get("coverage")),
-                    "state": one_hour.get("state") or (one_hour.get("market_state") or {}).get("state"),
+                    "regime": (one_hour.get("regime") or {}).get("regime"),
                 },
                 "4h": {
                     "timestamp": four_hour.get("timestamp"),
