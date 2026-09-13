@@ -12,6 +12,8 @@ from pathlib import Path
 
 DEFAULT_LABEL = "com.stanley.eth-meta-pipeline"
 DEFAULT_INTERVAL_SECONDS = 900
+DEFAULT_TRADINGAGENTS_REPO = Path.home() / ".openclaw/workspace/tools/eth-meta-runtime/TradingAgents"
+TCC_PROTECTED_USER_FOLDERS = ("Documents", "Desktop", "Downloads")
 
 
 def _require_executable(explicit: str | None, name: str) -> str:
@@ -27,6 +29,24 @@ def _require_executable(explicit: str | None, name: str) -> str:
     if not path.exists():
         raise RuntimeError(f"{name.upper()}_NOT_FOUND: {path}")
     return str(path)
+
+
+def _require_tcc_safe_runtime_path(
+    path: Path,
+    *,
+    role: str,
+    home: Path | None = None,
+) -> Path:
+    resolved = path.expanduser().resolve()
+    resolved_home = (home or Path.home()).expanduser().resolve()
+    for folder in TCC_PROTECTED_USER_FOLDERS:
+        protected_root = (resolved_home / folder).resolve()
+        try:
+            resolved.relative_to(protected_root)
+        except ValueError:
+            continue
+        raise RuntimeError(f"TCC_PROTECTED_RUNTIME_PATH: {role}={resolved}")
+    return resolved
 
 
 def build_plist(
@@ -116,7 +136,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Install the local ETH Meta Pipeline as a macOS LaunchAgent.")
     parser.add_argument(
         "--tradingagents-repo",
-        default=str(Path.home() / "Documents/mcpx-projects/TradingAgents-codex-oauth"),
+        default=str(DEFAULT_TRADINGAGENTS_REPO),
     )
     parser.add_argument("--python", help="Python executable used to run the local bridge")
     parser.add_argument("--gh", help="GitHub CLI path")
@@ -142,6 +162,12 @@ def main() -> int:
         uninstall(label=args.label, plist_path=plist_path)
         print(f"Uninstalled {args.label}")
         return 0
+
+    repo_root = _require_tcc_safe_runtime_path(repo_root, role="repo_root")
+    tradingagents_repo = _require_tcc_safe_runtime_path(
+        tradingagents_repo,
+        role="tradingagents_repo",
+    )
 
     python = _require_executable(args.python or sys.executable, "python")
     gh = _require_executable(args.gh, "gh")
