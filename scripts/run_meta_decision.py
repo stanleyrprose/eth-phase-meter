@@ -27,11 +27,21 @@ def main() -> int:
         default="eth_reports/meta_decision.json",
         help="output path for eth-meta-decision-v1 JSON",
     )
+    parser.add_argument(
+        "--max-source-age-hours",
+        type=float,
+        default=24.0,
+        help="fail closed if either source artifact is older than this many hours",
+    )
     args = parser.parse_args()
 
     monitor = json.loads(Path(args.monitor).read_text(encoding="utf-8"))
     tradingagents = json.loads(Path(args.tradingagents).read_text(encoding="utf-8"))
-    result = evaluate_meta_decision(monitor, tradingagents)
+    result = evaluate_meta_decision(
+        monitor,
+        tradingagents,
+        max_source_age_hours=args.max_source_age_hours,
+    )
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

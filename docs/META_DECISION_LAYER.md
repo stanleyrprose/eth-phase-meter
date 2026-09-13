@@ -40,6 +40,17 @@ Required fields used by this layer:
 }
 ```
 
+Unknown decision values fail closed instead of being silently treated as neutral.
+
+## Freshness contract
+
+Both source systems must be fresh. The default maximum artifact age is 24 hours:
+
+- `TradingAgents.generated_at` must be parseable and fresh.
+- Phase Meter 1h and 4h `timestamp` values must both be parseable and fresh.
+
+A stale or invalid timestamp produces `AVOID`. The CLI can tighten or relax the window with `--max-source-age-hours`.
+
 ## Decision policy
 
 ### ADD
@@ -52,7 +63,7 @@ Requires all of the following:
 - 4h momentum >= +20.
 - 4h order flow > 0.
 - 4h options positioning is not strongly blocking (>= -25).
-- both Phase Meter snapshots pass data-health and coverage gates.
+- both Phase Meter snapshots pass data-health, coverage, and freshness gates.
 
 ### REDUCE
 
@@ -62,14 +73,16 @@ Requires all of the following:
 - 4h direction <= -20.
 - 1h direction <= -10.
 - 4h momentum or order flow is non-positive.
-- data-health gates pass.
+- data-health and freshness gates pass.
 
 ### AVOID
 
 Fail closed when any material trust/conflict condition is present, including:
 
 - invalid TradingAgents contract;
+- unknown TradingAgents decision value;
 - asset mismatch;
+- stale/invalid TradingAgents or Phase Meter timestamp;
 - Phase Meter coverage/data-health failure;
 - extreme volatility risk >= 75;
 - strong 1h/4h directional conflict;

@@ -10,6 +10,7 @@ TRADINGAGENTS_CONTRACT_VERSION = "tradingagents-decision-v1"
 _BUY_DECISIONS = {"BUY", "STRONG BUY", "ADD", "ACCUMULATE"}
 _SELL_DECISIONS = {"SELL", "STRONG SELL", "REDUCE", "EXIT"}
 _HOLD_DECISIONS = {"HOLD", "WAIT", "NEUTRAL"}
+_KNOWN_DECISIONS = _BUY_DECISIONS | _SELL_DECISIONS | _HOLD_DECISIONS
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -47,9 +48,39 @@ def _decision_side(decision: str) -> int:
         return 1
     if decision in _SELL_DECISIONS:
         return -1
-    if decision in _HOLD_DECISIONS:
-        return 0
     return 0
+
+
+def _parse_timestamp(value: Any) -> dt.datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if text.endswith(" UTC"):
+        try:
+            return dt.datetime.strptime(text, "%Y-%m-%d %H:%M UTC").replace(tzinfo=dt.timezone.utc)
+        except ValueError:
+            return None
+    try:
+        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _is_fresh(
+    value: Any,
+    *,
+    now: dt.datetime,
+    max_age_hours: float,
+    future_skew_seconds: float = 300.0,
+) -> bool:
+    timestamp = _parse_timestamp(value)
+    if timestamp is None:
+        return False
+    age_seconds = (now - timestamp).total_seconds()
+    return -future_skew_seconds <= age_seconds <= max_age_hours * 3600
 
 
 def evaluate_meta_decision(
@@ -57,12 +88,19 @@ def evaluate_meta_decision(
     tradingagents: dict[str, Any],
     *,
     minimum_coverage: float = 80.0,
+    max_source_age_hours: float = 24.0,
+    now: dt.datetime | None = None,
 ) -> dict[str, Any]:
     """Combine TradingAgents judgment with Phase Meter state without inventing probabilities.
 
-    This layer is intentionally deterministic decision support. It does not alter model
-    promotion, calibrated forecasts, execution gates, or order execution.
+    This layer is deterministic decision support. It does not alter model promotion,
+    calibrated forecasts, execution gates, or order execution.
     """
+
+    current_time = now or dt.datetime.now(dt.timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=dt.timezone.utc)
+    current_time = current_time.astimezone(dt.timezone.utc)
 
     one_hour = monitor.get("1h") or {}
     four_hour = monitor.get("4h") or {}
@@ -79,10 +117,25 @@ def evaluate_meta_decision(
     recommendation = "HOLD"
 
     contract_ok = tradingagents.get("contract_version") == TRADINGAGENTS_CONTRACT_VERSION
+    decision_known = ta_decision in _KNOWN_DECISIONS
     symbol = str(tradingagents.get("canonical_symbol") or "").upper()
     symbol_ok = symbol in {"ETH-USD", "ETHUSD", "ETHUSDT"}
     phase_health_ok = _health_ok(one_hour, minimum_coverage=minimum_coverage) and _health_ok(
         four_hour, minimum_coverage=minimum_coverage
+    )
+    tradingagents_fresh = _is_fresh(
+        tradingagents.get("generated_at"),
+        now=current_time,
+        max_age_hours=max_source_age_hours,
+    )
+    phase_fresh = _is_fresh(
+        one_hour.get("timestamp"),
+        now=current_time,
+        max_age_hours=max_source_age_hours,
+    ) and _is_fresh(
+        four_hour.get("timestamp"),
+        now=current_time,
+        max_age_hours=max_source_age_hours,
     )
 
     strong_phase_conflict = d1 * d4 < 0 and abs(d1) >= 20 and abs(d4) >= 20
@@ -92,12 +145,21 @@ def evaluate_meta_decision(
     if not contract_ok:
         recommendation = "AVOID"
         reasons.append("TRADINGAGENTS_CONTRACT_INVALID")
+    if not decision_known:
+        recommendation = "AVOID"
+        reasons.append("TRADINGAGENTS_DECISION_UNKNOWN")
     if not symbol_ok:
         recommendation = "AVOID"
         reasons.append("ASSET_MISMATCH")
+    if not tradingagents_fresh:
+        recommendation = "AVOID"
+        reasons.append("TRADINGAGENTS_STALE_OR_TIMESTAMP_INVALID")
     if not phase_health_ok:
         recommendation = "AVOID"
         reasons.append("PHASE_DATA_GATED")
+    if not phase_fresh:
+        recommendation = "AVOID"
+        reasons.append("PHASE_DATA_STALE_OR_TIMESTAMP_INVALID")
     if extreme_risk:
         recommendation = "AVOID"
         reasons.append("EXTREME_VOLATILITY_RISK")
@@ -170,7 +232,7 @@ def evaluate_meta_decision(
 
     return {
         "contract_version": META_CONTRACT_VERSION,
-        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "generated_at": current_time.isoformat(),
         "asset": "ETH-USD",
         "recommendation": recommendation,
         "evidence_alignment": alignment,
@@ -180,15 +242,17 @@ def evaluate_meta_decision(
                 "contract_version": tradingagents.get("contract_version"),
                 "analysis_date": tradingagents.get("analysis_date"),
                 "generated_at": tradingagents.get("generated_at"),
+                "fresh": tradingagents_fresh,
                 "decision": ta_decision,
                 "report_path": tradingagents.get("report_path"),
             },
             "phase_meter": {
+                "fresh": phase_fresh,
                 "1h": {
                     "timestamp": one_hour.get("timestamp"),
                     "direction": d1,
                     "coverage": _number(one_hour.get("coverage")),
-                    "state": one_hour.get("state") or one_hour.get("market_state", {}).get("state"),
+                    "state": one_hour.get("state") or (one_hour.get("market_state") or {}).get("state"),
                 },
                 "4h": {
                     "timestamp": four_hour.get("timestamp"),
