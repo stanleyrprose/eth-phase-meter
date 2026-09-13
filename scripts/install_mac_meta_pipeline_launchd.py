@@ -73,6 +73,7 @@ def build_plist(
         "EnvironmentVariables": {
             "HOME": str(Path.home()),
             "PATH": deduped_path,
+            "PYTHONUNBUFFERED": "1",
         },
         "StandardOutPath": str(state_dir / "launchd.stdout.log"),
         "StandardErrorPath": str(state_dir / "launchd.stderr.log"),

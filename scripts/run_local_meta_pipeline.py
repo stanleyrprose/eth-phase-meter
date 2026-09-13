@@ -2,13 +2,48 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import faulthandler
 import json
+import os
+import signal
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Iterator
+
+
+GH_LIST_TIMEOUT_SECONDS = 30
+GH_DOWNLOAD_TIMEOUT_SECONDS = 120
+TRADINGAGENTS_TIMEOUT_SECONDS = 3600
+DEFAULT_WATCHDOG_SECONDS = 4200
+TRACEBACK_DELAY_SECONDS = 60
+PROCESS_TERMINATION_GRACE_SECONDS = 2
+PROGRESS_FILENAME = "progress.jsonl"
+
+
+class PipelineWatchdogTimeout(TimeoutError):
+    pass
+
+
+class ProgressLogger:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def emit(self, stage: str, **details: object) -> None:
+        payload = {
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "stage": stage,
+            **details,
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+            handle.flush()
+        print(f"Meta Pipeline progress: {stage}", flush=True)
 
 
 def _repo_root() -> Path:
@@ -37,8 +72,84 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
 
-def _run(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, cwd=cwd, text=True, capture_output=True, check=False)
+def _signal_process_tree(process: subprocess.Popen[str], sig: signal.Signals) -> None:
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, sig)
+        elif sig == signal.SIGTERM:
+            process.terminate()
+        else:
+            process.kill()
+    except ProcessLookupError:
+        pass
+
+
+def _stop_process_tree(process: subprocess.Popen[str]) -> None:
+    _signal_process_tree(process, signal.SIGTERM)
+    try:
+        process.communicate(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        _signal_process_tree(process, signal.SIGKILL)
+    process.communicate()
+
+
+def _run(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: float | None = None,
+    timeout_code: str = "SUBPROCESS_TIMEOUT",
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=os.name == "posix",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _stop_process_tree(process)
+        raise RuntimeError(timeout_code) from None
+    except BaseException:
+        _stop_process_tree(process)
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+@contextlib.contextmanager
+def _pipeline_watchdog(seconds: float) -> Iterator[None]:
+    if seconds <= 0 or os.name != "posix":
+        yield
+        return
+
+    def _timeout(_signum: int, _frame: object) -> None:
+        raise PipelineWatchdogTimeout("PIPELINE_WATCHDOG_TIMEOUT")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _timeout)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
+@contextlib.contextmanager
+def _delayed_traceback_diagnostics(delay_seconds: float = TRACEBACK_DELAY_SECONDS) -> Iterator[None]:
+    try:
+        faulthandler.dump_traceback_later(delay_seconds, repeat=True)
+    except (OSError, ValueError):
+        yield
+        return
+    try:
+        yield
+    finally:
+        faulthandler.cancel_dump_traceback_later()
 
 
 def _latest_monitor_run(gh: str, repo: str, workflow: str) -> dict:
@@ -57,7 +168,9 @@ def _latest_monitor_run(gh: str, repo: str, workflow: str) -> dict:
             "1",
             "--json",
             "databaseId,headSha,createdAt",
-        ]
+        ],
+        timeout=GH_LIST_TIMEOUT_SECONDS,
+        timeout_code="GH_RUN_LIST_TIMEOUT",
     )
     if completed.returncode != 0:
         raise RuntimeError(f"GH_RUN_LIST_FAILED: {completed.stderr.strip()}")
@@ -80,7 +193,9 @@ def _download_monitor(gh: str, repo: str, run_id: int, destination: Path) -> Pat
             "eth-monitor-*",
             "--dir",
             str(destination),
-        ]
+        ],
+        timeout=GH_DOWNLOAD_TIMEOUT_SECONDS,
+        timeout_code="GH_RUN_DOWNLOAD_TIMEOUT",
     )
     if completed.returncode != 0:
         raise RuntimeError(f"GH_RUN_DOWNLOAD_FAILED: {completed.stderr.strip()}")
@@ -124,6 +239,8 @@ def _run_tradingagents(repo: Path, python: str, analysis_date: str, decision_pat
             str(decision_path),
         ],
         cwd=repo,
+        timeout=TRADINGAGENTS_TIMEOUT_SECONDS,
+        timeout_code="TRADINGAGENTS_TIMEOUT",
     )
     if completed.returncode != 0:
         tail = (completed.stderr or completed.stdout or "")[-2000:]
@@ -132,7 +249,7 @@ def _run_tradingagents(repo: Path, python: str, analysis_date: str, decision_pat
         raise RuntimeError("TRADINGAGENTS_DECISION_NOT_WRITTEN")
 
 
-def main() -> int:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Event-triggered local bridge from the latest GitHub ETH monitor artifact to TradingAgents."
     )
@@ -155,15 +272,26 @@ def main() -> int:
     )
     parser.add_argument("--force-ta", action="store_true", help="force a TradingAgents refresh after phase gates pass")
     parser.add_argument(
+        "--watchdog-seconds",
+        type=float,
+        default=DEFAULT_WATCHDOG_SECONDS,
+        help="whole-pipeline POSIX watchdog in seconds; use 0 to disable (default: 4200)",
+    )
+    parser.add_argument(
         "--telegram-secret-file",
         default=str(Path.home() / ".eth-meta-pipeline" / "telegram.json"),
         help="local Telegram credential JSON; TG_BOT_TOKEN/TG_CHAT_ID take precedence",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.watchdog_seconds < 0:
+        parser.error("--watchdog-seconds must be non-negative")
+    return args
 
+
+def _execute_pipeline(args: argparse.Namespace, progress: ProgressLogger) -> int:
     evaluate_meta_decision, evaluate_trigger, process_notification = _load_components()
+    progress.emit("components_loaded")
     state_dir = Path(args.state_dir).expanduser().resolve()
-    state_dir.mkdir(parents=True, exist_ok=True)
     state_path = state_dir / "state.json"
     previous_monitor_path = state_dir / "latest_monitor.json"
     decision_path = state_dir / "tradingagents_decision.json"
@@ -174,22 +302,30 @@ def main() -> int:
     run_id: int | str
     run_sha: str | None = None
     if args.monitor_file:
+        progress.emit("monitor_load_started", source="local")
         monitor_path = Path(args.monitor_file).expanduser().resolve()
         monitor = _read_json(monitor_path)
         run_id = f"local:{(monitor.get('4h') or {}).get('timestamp') or monitor_path.stat().st_mtime_ns}"
+        progress.emit("monitor_loaded", source="local", run_id=run_id)
     else:
         gh = args.gh or shutil.which("gh")
         if not gh:
             raise RuntimeError("GH_CLI_NOT_FOUND")
+        progress.emit("gh_run_list_started")
         latest = _latest_monitor_run(gh, args.repo, args.workflow)
         run_id = int(latest["databaseId"])
         run_sha = latest.get("headSha")
+        progress.emit("gh_run_list_completed", run_id=run_id)
         if state.get("last_processed_run_id") == run_id:
+            progress.emit("pipeline_completed", status="NO_NEW_MONITOR_RUN", run_id=run_id)
             print(f"NO_NEW_MONITOR_RUN run_id={run_id}")
             return 0
         with tempfile.TemporaryDirectory(prefix="eth-meta-") as tmp:
+            progress.emit("gh_run_download_started", run_id=run_id)
             monitor_path = _download_monitor(gh, args.repo, run_id, Path(tmp))
+            progress.emit("gh_run_download_completed", run_id=run_id)
             monitor = _read_json(monitor_path)
+            progress.emit("monitor_loaded", source="github", run_id=run_id)
 
     previous_monitor = _read_json(previous_monitor_path)
     existing_decision = _read_json(decision_path)
@@ -204,6 +340,7 @@ def main() -> int:
     trigger["monitor_run_id"] = run_id
     trigger["monitor_git_sha"] = run_sha
     _write_json(trigger_path, trigger)
+    progress.emit("trigger_evaluated", action=trigger["action"], run_id=run_id)
 
     if trigger["action"] == "DEFER":
         _write_json(previous_monitor_path, monitor)
@@ -216,16 +353,21 @@ def main() -> int:
             }
         )
         _write_json(state_path, state)
+        progress.emit("state_written", status="DEFER", run_id=run_id)
+        progress.emit("pipeline_completed", status="DEFER", run_id=run_id)
         print(f"Meta Pipeline: DEFER | reasons={','.join(trigger['reason_codes'])}")
         return 0
 
     if trigger["action"] == "RUN":
         ta_repo = Path(args.tradingagents_repo).expanduser().resolve()
         ta_python = _tradingagents_python(ta_repo, args.tradingagents_python)
+        progress.emit("tradingagents_started", run_id=run_id)
         _run_tradingagents(ta_repo, ta_python, _monitor_date(monitor), decision_path)
+        progress.emit("tradingagents_completed", run_id=run_id)
 
     decision = _read_json(decision_path)
     meta = evaluate_meta_decision(monitor, decision)
+    progress.emit("meta_decision_completed", recommendation=meta["recommendation"], run_id=run_id)
     meta["pipeline"] = {
         "monitor_run_id": run_id,
         "monitor_git_sha": run_sha,
@@ -238,6 +380,7 @@ def main() -> int:
         secret_file=Path(args.telegram_secret_file).expanduser().resolve(),
     )
     meta["pipeline"]["notification"] = notification
+    progress.emit("notification_completed", status=notification["status"], run_id=run_id)
     _write_json(meta_path, meta)
     _write_json(previous_monitor_path, monitor)
     state.update(
@@ -252,12 +395,32 @@ def main() -> int:
         }
     )
     _write_json(state_path, state)
+    progress.emit("state_written", status="OK", run_id=run_id)
+    progress.emit("pipeline_completed", status="OK", run_id=run_id)
 
     print(
         f"Meta Pipeline: {meta['recommendation']} | alignment={meta['evidence_alignment']} | "
         f"ta={trigger['action']} | reasons={','.join(meta['reason_codes'])}"
     )
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    state_dir = Path(args.state_dir).expanduser().resolve()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    progress = ProgressLogger(state_dir / PROGRESS_FILENAME)
+    progress.emit("pipeline_started", watchdog_seconds=args.watchdog_seconds)
+    try:
+        with _delayed_traceback_diagnostics(), _pipeline_watchdog(args.watchdog_seconds):
+            return _execute_pipeline(args, progress)
+    except BaseException as exc:
+        progress.emit(
+            "pipeline_failed",
+            error_code=str(exc).split(":", 1)[0] or type(exc).__name__,
+            error_type=type(exc).__name__,
+        )
+        raise
 
 
 if __name__ == "__main__":

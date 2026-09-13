@@ -67,6 +67,7 @@ Files:
 - `tradingagents_decision.json`: latest `tradingagents-decision-v1` contract.
 - `meta_decision.json`: latest `eth-meta-decision-v1` result.
 - `telegram.json`: optional local Telegram credentials (owner-readable only).
+- `progress.jsonl`: append-only, flushed JSONL stage progress for the current and previous invocations.
 - `launchd.stdout.log` / `launchd.stderr.log`: local scheduler logs.
 
 A failed TradingAgents execution does not mark the GitHub monitor run as processed, so a later scheduler invocation can retry the same source artifact.
@@ -116,7 +117,21 @@ Install the 15-minute LaunchAgent from that worktree:
   --codex /opt/homebrew/bin/codex
 ```
 
-The installer writes `~/Library/LaunchAgents/com.stanley.eth-meta-pipeline.plist`, explicitly sets `HOME` and a PATH containing the Python, GitHub CLI, and Codex CLI directories, and schedules the bridge every 900 seconds. `RunAtLoad` is intentionally false so installation itself does not unexpectedly launch an expensive TradingAgents graph. Use `--kickstart` only when an immediate run is desired.
+The installer writes `~/Library/LaunchAgents/com.stanley.eth-meta-pipeline.plist`, explicitly sets `HOME`, a PATH containing the Python, GitHub CLI, and Codex CLI directories, and `PYTHONUNBUFFERED=1`, and schedules the bridge every 900 seconds. `RunAtLoad` is intentionally false so installation itself does not unexpectedly launch an expensive TradingAgents graph. Use `--kickstart` only when an immediate run is desired.
+
+## Progress and hang troubleshooting
+
+Each invocation appends flushed stage records to `~/.eth-meta-pipeline/progress.jsonl` and immediately prints the stage name (without detail values) to `launchd.stdout.log`. Explicit stages confirm completed GitHub artifact downloads and completed `state.json` writes for both normal and deferred runs. To see where the latest invocation stopped:
+
+```bash
+tail -n 30 ~/.eth-meta-pipeline/progress.jsonl
+tail -n 100 ~/.eth-meta-pipeline/launchd.stdout.log
+tail -n 100 ~/.eth-meta-pipeline/launchd.stderr.log
+```
+
+The GitHub run lookup, artifact download, and TradingAgents wrapper have hard time limits of 30 seconds, 120 seconds, and 3600 seconds. Their stable failure codes are `GH_RUN_LIST_TIMEOUT`, `GH_RUN_DOWNLOAD_TIMEOUT`, and `TRADINGAGENTS_TIMEOUT`. A timed-out subprocess is terminated with its POSIX process group so child processes do not remain behind.
+
+The whole pipeline also has a POSIX watchdog of 4200 seconds. Override it for an operator diagnostic with `--watchdog-seconds SECONDS`, or disable it explicitly with `--watchdog-seconds 0`. Expiry reports `PIPELINE_WATCHDOG_TIMEOUT`; the watchdog alarm is cancelled when execution exits normally or with an error. While a run is active, delayed Python tracebacks are written to stderr every 60 seconds, which makes a minute-scale blocked stack visible in `launchd.stderr.log` without changing trigger, forecast, Meta Decision, or notification behavior.
 
 ## Non-goals
 
