@@ -124,6 +124,41 @@ class TestPublicExternalState(unittest.TestCase):
         self.assertNotIn("defi_tvl_change_usd", state["capital_flow"])
 
     @patch("eth_trend_v3.external_state.requests.get")
+    def test_defillama_inflows_prefers_direct_page(self, get):
+        direct = Mock(ok=True)
+        direct.text = '<span data-metric-label="true">Inflows (24h)</span></button><span data-metric-value="true">-$12.97m</span>'
+        get.return_value = direct
+
+        flow = external_state._defillama_eth_inflows_state()["capital_flow"]
+        self.assertEqual(flow["defi_inflows_24h_usd"], -12_970_000.0)
+        self.assertEqual(flow["defi_inflows_window_hours"], 24)
+        self.assertNotIn("via Jina", flow["_source"])
+        self.assertEqual(get.call_count, 1)
+
+    @patch("eth_trend_v3.external_state.requests.get")
+    def test_defillama_inflows_uses_jina_fallback(self, get):
+        direct = Mock(ok=False, status_code=403, text="blocked")
+        direct.json.side_effect = ValueError("not json")
+        proxy = Mock(ok=True)
+        proxy.text = "Volume (7d)$6.5b Inflows (24h)$6.82m Active Addresses (24h)386,979"
+        get.side_effect = [direct, proxy]
+
+        flow = external_state._defillama_eth_inflows_state()["capital_flow"]
+        self.assertEqual(flow["defi_inflows_24h_usd"], 6_820_000.0)
+        self.assertIn("via Jina Reader", flow["_source"])
+        self.assertEqual(get.call_count, 2)
+
+    @patch("eth_trend_v3.external_state.requests.get")
+    def test_defillama_inflows_failure_stays_missing_not_zero(self, get):
+        direct = Mock(ok=True, text="no metric here")
+        proxy = Mock(ok=True, text="still no inflow metric")
+        get.side_effect = [direct, proxy]
+
+        flow = external_state._defillama_eth_inflows_state()["capital_flow"]
+        self.assertEqual(flow["_error"], "DEFILLAMA_INFLOW_JINA_PARSE_ERROR")
+        self.assertNotIn("defi_inflows_24h_usd", flow)
+
+    @patch("eth_trend_v3.external_state.requests.get")
     def test_farside_maps_latest_daily_total_and_negative_parentheses(self, get):
         response = Mock(ok=True)
         response.text = """
