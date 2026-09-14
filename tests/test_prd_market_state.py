@@ -107,7 +107,7 @@ class TestMarketState(unittest.TestCase):
                     "etf_flow_usd": 115_600_000,
                     "exchange_netflow_eth": -18_166,
                     "stablecoin_supply_change_usd": 484_900_000,
-                    "defi_tvl_change_usd": 250_000_000,
+                    "defi_inflows_24h_usd": 250_000_000,
                 },
                 "structural": {},
             },
@@ -120,6 +120,19 @@ class TestMarketState(unittest.TestCase):
             {
                 "valuation": {},
                 "capital_flow": {"stablecoin_flow_usd": 500_000_000},
+                "structural": {},
+            },
+            _result(),
+        )
+        flow = state["dimensions"]["capital_flow"]
+        self.assertIsNone(flow["score"])
+        self.assertEqual(flow["coverage"], 0)
+
+    def test_tvl_change_is_diagnostic_only_and_does_not_inflate_capital_flow_coverage(self):
+        state = build_market_state(
+            {
+                "valuation": {},
+                "capital_flow": {"defi_tvl_change_usd": 500_000_000},
                 "structural": {},
             },
             _result(),
@@ -179,7 +192,7 @@ class TestMarketState(unittest.TestCase):
             {"valuation": {}, "capital_flow": {}, "structural": {}}, _result()
         )
         self.assertEqual(state["dimension_versions"]["valuation"], "valuation-v2-defi-tvl")
-        self.assertEqual(state["dimension_versions"]["capital_flow"], "capital-flow-v2-defi-tvl")
+        self.assertEqual(state["dimension_versions"]["capital_flow"], "capital-flow-v3-usd-inflows")
         self.assertEqual(
             state["dimension_versions"]["structural_supply"],
             "structural-supply-v3-free-baseline",

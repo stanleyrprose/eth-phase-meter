@@ -15,6 +15,11 @@ class TestDuneExternalState(unittest.TestCase):
             return_value={"valuation": {}, "capital_flow": {}},
         )
         self.tvl_mock = self.tvl_patcher.start()
+        self.inflow_patcher = patch(
+            "eth_trend_v3.external_state._defillama_eth_inflows_state",
+            return_value={"capital_flow": {}},
+        )
+        self.inflow_mock = self.inflow_patcher.start()
         for k in (
             "DUNE_API_KEY",
             "ETH_VALUATION_API_URL",
@@ -24,6 +29,7 @@ class TestDuneExternalState(unittest.TestCase):
             os.environ.pop(k, None)
 
     def tearDown(self):
+        self.inflow_patcher.stop()
         self.tvl_patcher.stop()
         self.beacon_patcher.stop()
         os.environ.clear()
@@ -62,6 +68,9 @@ class TestDuneExternalState(unittest.TestCase):
             "valuation": {"defi_tvl_usd": 50_000_000_000.0},
             "capital_flow": {"defi_tvl_change_usd": 250_000_000.0},
         }
+        self.inflow_mock.return_value = {
+            "capital_flow": {"defi_inflows_24h_usd": 7_500_000.0}
+        }
         defillama.return_value = {
             "capital_flow": {"stablecoin_supply_change_usd": 125_000_000.0}
         }
@@ -70,6 +79,7 @@ class TestDuneExternalState(unittest.TestCase):
         r = external_state.collect_external_state()
         self.assertEqual(r["valuation"]["mcap_to_tvl"], 6.0)
         self.assertEqual(r["capital_flow"]["defi_tvl_change_usd"], 250_000_000.0)
+        self.assertEqual(r["capital_flow"]["defi_inflows_24h_usd"], 7_500_000.0)
 
     @patch("eth_trend_v3.external_state._farside_eth_etf_state")
     @patch("eth_trend_v3.external_state._defillama_stablecoin_state")

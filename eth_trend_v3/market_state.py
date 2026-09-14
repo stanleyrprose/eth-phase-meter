@@ -6,7 +6,7 @@ from .engine import crowding_coverage
 DIMENSION_SCHEMA_VERSIONS = {
     "trend": "trend-v1",
     "valuation": "valuation-v2-defi-tvl",
-    "capital_flow": "capital-flow-v2-defi-tvl",
+    "capital_flow": "capital-flow-v3-usd-inflows",
     "crowding": "crowding-v2-dte48",
     "structural_supply": "structural-supply-v3-free-baseline",
     "volatility_risk": "volatility-risk-v1",
@@ -60,15 +60,17 @@ def build_market_state(raw: dict, result) -> dict:
     etf = _num(flow_raw, "etf_flow_usd", "etf_netflow")
     exchange = _num(flow_raw, "exchange_netflow_eth", "exchange_netflow")
     stable_supply = _num(flow_raw, "stablecoin_supply_change_usd")
-    defi_tvl_change = _num(flow_raw, "defi_tvl_change_usd")
+    defi_inflows = _num(flow_raw, "defi_inflows_24h_usd")
     if etf is not None:
         fvals.append(_clip(etf / 250_000_000 * 100))
     if exchange is not None:
         fvals.append(_clip(-exchange / 100_000 * 100))
     if stable_supply is not None:
         fvals.append(_clip(stable_supply / 500_000_000 * 100))
-    if defi_tvl_change is not None:
-        fvals.append(_clip(defi_tvl_change / 500_000_000 * 100))
+    if defi_inflows is not None:
+        # Price-neutral 24h net asset inflow. ±$250M maps to the score bounds,
+        # roughly 0.5% of current Ethereum DeFi TVL and intentionally conservative.
+        fvals.append(_clip(defi_inflows / 250_000_000 * 100))
     capital_flow = sum(fvals) / len(fvals) if fvals else None
 
     structural_raw = raw.get("structural") or {}

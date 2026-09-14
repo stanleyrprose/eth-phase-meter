@@ -10,6 +10,8 @@ import requests
 COINMETRICS_COMMUNITY_URL = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
 DEFILLAMA_ETH_STABLECOIN_URL = "https://stablecoins.llama.fi/stablecoincharts/Ethereum"
 DEFILLAMA_ETH_TVL_URL = "https://api.llama.fi/v2/historicalChainTvl/Ethereum"
+DEFILLAMA_ETH_CHAIN_URL = "https://defillama.com/chain/ethereum"
+JINA_DEFILLAMA_ETH_CHAIN_URL = "https://r.jina.ai/https://defillama.com/chain/ethereum"
 FARSIDE_ETH_ETF_URL = "https://farside.co.uk/eth/"
 JINA_FARSIDE_ETH_ETF_URL = "https://r.jina.ai/https://farside.co.uk/eth/"
 BEACONCHAIN_QUEUES_URL = "https://beaconcha.in/validators/queues"
@@ -296,6 +298,101 @@ def _defillama_eth_tvl_state() -> dict:
     except Exception as exc:
         err = {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "DefiLlama"}
         return {"valuation": dict(err), "capital_flow": dict(err)}
+
+
+def _parse_compact_usd(value: str):
+    text = html.unescape(value or "").replace("\xa0", " ").strip()
+    if not text or text.upper() in {"N/A", "NA", "-", "—"}:
+        return None
+    text = text.replace("−", "-").replace("–", "-").replace("—", "-")
+    negative_parentheses = text.startswith("(") and text.endswith(")")
+    text = text.strip("() ").replace(",", "")
+    match = re.fullmatch(r"([+-]?)\s*\$?\s*([0-9]+(?:\.[0-9]+)?)\s*([kKmMbBtT]?)", text)
+    if not match:
+        return None
+    sign, number, suffix = match.groups()
+    multiplier = {"": 1.0, "k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12}[suffix.lower()]
+    amount = float(number) * multiplier
+    if sign == "-" or negative_parentheses:
+        amount = -amount
+    return amount
+
+
+def _extract_defillama_inflows_usd(text: str):
+    """Parse Ethereum's rolling 24h USD Inflows from DefiLlama page text/HTML."""
+    direct = re.search(
+        r"Inflows\s*\(24h\).*?data-metric-value=[\"']true[\"'][^>]*>(.*?)</span>",
+        text or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if direct:
+        value = html.unescape(re.sub(r"<[^>]+>", "", direct.group(1))).strip()
+        parsed = _parse_compact_usd(value)
+        if parsed is not None:
+            return parsed
+    plain = re.search(
+        r"Inflows\s*\(24h\)\s*([−–—+-]?\s*\$?\s*[0-9][0-9,.]*\s*[kKmMbBtT]?)",
+        html.unescape(text or ""),
+        flags=re.IGNORECASE,
+    )
+    return _parse_compact_usd(plain.group(1)) if plain else None
+
+
+def _defillama_eth_inflows_state() -> dict:
+    """Best-effort Ethereum 24h USD Inflows: direct page first, Jina fallback."""
+    headers = {"User-Agent": "eth-phase-meter/1.0 (+https://github.com/stanleyrprose/eth-phase-meter)"}
+    direct_error = None
+    try:
+        response = requests.get(DEFILLAMA_ETH_CHAIN_URL, headers=headers, timeout=20)
+        if response.ok:
+            inflow = _extract_defillama_inflows_usd(response.text)
+            if inflow is not None:
+                return {
+                    "capital_flow": {
+                        "defi_inflows_24h_usd": inflow,
+                        "defi_inflows_window_hours": 24,
+                        "_source": "DefiLlama Ethereum chain page: USD Inflows (24h)",
+                        "_observed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                }
+            direct_error = {"_error": "DEFILLAMA_INFLOW_PARSE_ERROR"}
+        else:
+            direct_error = _safe_http_error(response, "DEFILLAMA_INFLOW_HTTP_ERROR")
+    except requests.RequestException as exc:
+        direct_error = {"_error": type(exc).__name__, "message": str(exc)[:300]}
+
+    try:
+        proxy = requests.get(JINA_DEFILLAMA_ETH_CHAIN_URL, headers=headers, timeout=30)
+        if not proxy.ok:
+            err = _safe_http_error(proxy, "DEFILLAMA_INFLOW_JINA_HTTP_ERROR")
+            err["message"] = f"direct={direct_error}; proxy={err.get('message')}"[:300]
+            err["_source"] = "DefiLlama Ethereum via Jina Reader"
+            return {"capital_flow": err}
+        inflow = _extract_defillama_inflows_usd(proxy.text)
+        if inflow is None:
+            return {
+                "capital_flow": {
+                    "_error": "DEFILLAMA_INFLOW_JINA_PARSE_ERROR",
+                    "message": f"direct={direct_error}"[:300],
+                    "_source": "DefiLlama Ethereum via Jina Reader",
+                }
+            }
+        return {
+            "capital_flow": {
+                "defi_inflows_24h_usd": inflow,
+                "defi_inflows_window_hours": 24,
+                "_source": "DefiLlama Ethereum via Jina Reader: USD Inflows (24h)",
+                "_observed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        }
+    except requests.RequestException as exc:
+        return {
+            "capital_flow": {
+                "_error": type(exc).__name__,
+                "message": f"direct={direct_error}; proxy={str(exc)[:180]}"[:300],
+                "_source": "DefiLlama Ethereum via Jina Reader",
+            }
+        }
 
 
 def _parse_farside_amount_musd(value: str):
@@ -646,6 +743,7 @@ def collect_external_state() -> dict:
     """
     cm = _coinmetrics_community_state()
     tvl = _defillama_eth_tvl_state()
+    inflows = _defillama_eth_inflows_state()
     llama = _defillama_stablecoin_state()
     farside = _farside_eth_etf_state()
     beacon_queue = _beaconchain_queue_state()
@@ -669,6 +767,9 @@ def collect_external_state() -> dict:
     )
     result["capital_flow"] = _merge_dimension(
         result["capital_flow"], tvl.get("capital_flow") or {}, "defillama-tvl"
+    )
+    result["capital_flow"] = _merge_dimension(
+        result["capital_flow"], inflows.get("capital_flow") or {}, "defillama-inflows"
     )
     result["capital_flow"] = _merge_dimension(
         result["capital_flow"], llama.get("capital_flow") or {}, "defillama"
