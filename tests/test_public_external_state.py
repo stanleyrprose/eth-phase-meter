@@ -57,6 +57,73 @@ class TestPublicExternalState(unittest.TestCase):
         self.assertEqual(state["valuation"]["_observed_at"], "2026-08-24T00:00:00.000000000Z")
 
     @patch("eth_trend_v3.external_state.requests.get")
+    def test_coinmetrics_uses_latest_usable_metric_rows_when_publication_is_asynchronous(self, get):
+        response = Mock(ok=True)
+        response.json.return_value = {
+            "data": [
+                {
+                    "time": "2026-08-23T00:00:00.000000000Z",
+                    "CapMVRVCur": "1.10",
+                    "CapMrktCurUSD": "300000000000",
+                    "SplyCur": "121980000",
+                    "SplyExNtv": "15750000",
+                    "FlowInExNtv": "160000",
+                    "FlowOutExNtv": "140000",
+                },
+                {
+                    "time": "2026-08-24T00:00:00.000000000Z",
+                    "CapMVRVCur": "1.12",
+                    "CapMrktCurUSD": "305000000000",
+                    "SplyCur": "121983000",
+                    "SplyExNtv": "15718500",
+                    "FlowInExNtv": "347821.45",
+                    "FlowOutExNtv": "365987.68",
+                },
+                {
+                    "time": "2026-08-25T00:00:00.000000000Z",
+                    "PriceUSD": "2500",
+                },
+            ]
+        }
+        get.return_value = response
+
+        state = external_state._coinmetrics_community_state()
+        self.assertEqual(state["valuation"]["mvrv"], 1.12)
+        self.assertEqual(state["valuation"]["market_cap_usd"], 305000000000.0)
+        self.assertEqual(state["valuation"]["price_usd"], 2500.0)
+        self.assertAlmostEqual(state["capital_flow"]["exchange_netflow_eth"], -18166.23)
+        self.assertAlmostEqual(state["structural"]["net_issuance_eth"], 3000.0)
+        self.assertAlmostEqual(state["structural"]["exchange_balance_change_pct"], -0.2)
+        self.assertEqual(state["capital_flow"]["_observed_at"], "2026-08-24T00:00:00.000000000Z")
+        self.assertEqual(get.call_args.kwargs["params"]["page_size"], 5)
+
+    @patch("eth_trend_v3.external_state.requests.get")
+    def test_defillama_tvl_maps_level_and_daily_change(self, get):
+        response = Mock(ok=True)
+        response.json.return_value = [
+            {"date": "1787529600", "tvl": 50_000_000_000},
+            {"date": "1787616000", "tvl": 50_500_000_000},
+        ]
+        get.return_value = response
+
+        state = external_state._defillama_eth_tvl_state()
+        self.assertEqual(state["valuation"]["defi_tvl_usd"], 50_500_000_000.0)
+        self.assertEqual(state["capital_flow"]["defi_tvl_change_usd"], 500_000_000.0)
+        self.assertAlmostEqual(state["capital_flow"]["defi_tvl_change_pct"], 1.0)
+        self.assertIn("DefiLlama", state["capital_flow"]["_source"])
+
+    @patch("eth_trend_v3.external_state.requests.get")
+    def test_defillama_tvl_failure_stays_missing_not_zero(self, get):
+        response = Mock(ok=True)
+        response.json.return_value = [{"date": "1787616000", "tvl": None}]
+        get.return_value = response
+
+        state = external_state._defillama_eth_tvl_state()
+        self.assertEqual(state["valuation"]["_error"], "DEFILLAMA_TVL_INSUFFICIENT_HISTORY")
+        self.assertNotIn("defi_tvl_usd", state["valuation"])
+        self.assertNotIn("defi_tvl_change_usd", state["capital_flow"])
+
+    @patch("eth_trend_v3.external_state.requests.get")
     def test_farside_maps_latest_daily_total_and_negative_parentheses(self, get):
         response = Mock(ok=True)
         response.text = """

@@ -10,6 +10,11 @@ class TestDuneExternalState(unittest.TestCase):
         self.old = dict(os.environ)
         self.beacon_patcher = patch("eth_trend_v3.external_state._beaconchain_queue_state", return_value={"structural": {}})
         self.beacon_patcher.start()
+        self.tvl_patcher = patch(
+            "eth_trend_v3.external_state._defillama_eth_tvl_state",
+            return_value={"valuation": {}, "capital_flow": {}},
+        )
+        self.tvl_mock = self.tvl_patcher.start()
         for k in (
             "DUNE_API_KEY",
             "ETH_VALUATION_API_URL",
@@ -19,6 +24,7 @@ class TestDuneExternalState(unittest.TestCase):
             os.environ.pop(k, None)
 
     def tearDown(self):
+        self.tvl_patcher.stop()
         self.beacon_patcher.stop()
         os.environ.clear()
         os.environ.update(self.old)
@@ -42,6 +48,28 @@ class TestDuneExternalState(unittest.TestCase):
         self.assertEqual(r["capital_flow"]["stablecoin_supply_change_usd"], 125000000.0)
         self.assertEqual(r["capital_flow"]["etf_flow_usd"], 184000000.0)
         self.assertEqual(r["structural"]["net_issuance_eth"], 2800.0)
+
+    @patch("eth_trend_v3.external_state._farside_eth_etf_state")
+    @patch("eth_trend_v3.external_state._defillama_stablecoin_state")
+    @patch("eth_trend_v3.external_state._coinmetrics_community_state")
+    def test_public_tvl_enriches_valuation_and_capital_flow(self, coinmetrics, defillama, farside):
+        coinmetrics.return_value = {
+            "valuation": {"mvrv": 1.2, "market_cap_usd": 300_000_000_000.0},
+            "capital_flow": {"exchange_netflow_eth": -5000.0},
+            "structural": {},
+        }
+        self.tvl_mock.return_value = {
+            "valuation": {"defi_tvl_usd": 50_000_000_000.0},
+            "capital_flow": {"defi_tvl_change_usd": 250_000_000.0},
+        }
+        defillama.return_value = {
+            "capital_flow": {"stablecoin_supply_change_usd": 125_000_000.0}
+        }
+        farside.return_value = {"capital_flow": {"etf_flow_usd": 184_000_000.0}}
+
+        r = external_state.collect_external_state()
+        self.assertEqual(r["valuation"]["mcap_to_tvl"], 6.0)
+        self.assertEqual(r["capital_flow"]["defi_tvl_change_usd"], 250_000_000.0)
 
     @patch("eth_trend_v3.external_state._farside_eth_etf_state")
     @patch("eth_trend_v3.external_state._defillama_stablecoin_state")

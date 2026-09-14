@@ -9,6 +9,7 @@ import requests
 
 COINMETRICS_COMMUNITY_URL = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
 DEFILLAMA_ETH_STABLECOIN_URL = "https://stablecoins.llama.fi/stablecoincharts/Ethereum"
+DEFILLAMA_ETH_TVL_URL = "https://api.llama.fi/v2/historicalChainTvl/Ethereum"
 FARSIDE_ETH_ETF_URL = "https://farside.co.uk/eth/"
 JINA_FARSIDE_ETH_ETF_URL = "https://r.jina.ai/https://farside.co.uk/eth/"
 BEACONCHAIN_QUEUES_URL = "https://beaconcha.in/validators/queues"
@@ -100,6 +101,27 @@ def _float(value):
         return None
 
 
+def _latest_row_with_values(rows: list[dict], *metrics: str) -> dict:
+    """Return the newest row where every requested metric is numeric.
+
+    Coin Metrics Community metrics do not always publish at the same instant.
+    Selecting rows[-1] can therefore turn a still-valid prior daily observation
+    into a false missing value for several hours. Walking backward remains PIT
+    safe because only rows visible in the current response are considered.
+    """
+    for row in reversed(rows):
+        if all(_float(row.get(metric)) is not None for metric in metrics):
+            return row
+    return {}
+
+
+def _latest_two_rows_with_value(rows: list[dict], metric: str) -> tuple[dict, dict]:
+    usable = [row for row in rows if _float(row.get(metric)) is not None]
+    if len(usable) < 2:
+        return {}, {}
+    return usable[-2], usable[-1]
+
+
 def _merge_dimension(base: dict, enrichment: dict, provider_name: str) -> dict:
     """Fill missing metrics from enrichment while preserving baseline precedence/provenance."""
     out = dict(base or {})
@@ -139,9 +161,9 @@ def _coinmetrics_community_state() -> dict:
             COINMETRICS_COMMUNITY_URL,
             params={
                 "assets": "eth",
-                "metrics": "CapMVRVCur,SplyExNtv,SplyCur,AdrActCnt,FeeTotNtv,TxCnt,FlowInExNtv,FlowOutExNtv,FlowInExUSD,FlowOutExUSD,IssTotNtv",
+                "metrics": "CapMVRVCur,CapMrktCurUSD,PriceUSD,SplyExNtv,SplyCur,AdrActCnt,FeeTotNtv,TxCnt,FlowInExNtv,FlowOutExNtv,FlowInExUSD,FlowOutExUSD,IssTotNtv",
                 "frequency": "1d",
-                "page_size": 3,
+                "page_size": 5,
                 "paging_from": "end",
             },
             timeout=20,
@@ -154,34 +176,46 @@ def _coinmetrics_community_state() -> dict:
             err = {"_error": "COINMETRICS_EMPTY_RESULT", "_source": "Coin Metrics Community"}
             return {"valuation": dict(err), "capital_flow": dict(err), "structural": dict(err)}
         rows = sorted(rows, key=lambda row: str(row.get("time") or ""))
-        latest = rows[-1]
-        previous = rows[-2] if len(rows) >= 2 else {}
-        observed_at = latest.get("time")
+        mvrv_row = _latest_row_with_values(rows, "CapMVRVCur")
+        market_cap_row = _latest_row_with_values(rows, "CapMrktCurUSD")
+        price_row = _latest_row_with_values(rows, "PriceUSD")
+        exchange_flow_row = _latest_row_with_values(rows, "FlowInExNtv", "FlowOutExNtv")
+        supply_previous, supply_latest = _latest_two_rows_with_value(rows, "SplyCur")
+        exchange_previous, exchange_latest = _latest_two_rows_with_value(rows, "SplyExNtv")
+        activity_row = _latest_row_with_values(rows, "AdrActCnt")
+        fees_row = _latest_row_with_values(rows, "FeeTotNtv")
+        tx_row = _latest_row_with_values(rows, "TxCnt")
+        issuance_row = _latest_row_with_values(rows, "IssTotNtv")
 
         valuation = {
-            "mvrv": _float(latest.get("CapMVRVCur")),
-            "_source": "Coin Metrics Community: CapMVRVCur",
-            "_observed_at": observed_at,
+            "mvrv": _float(mvrv_row.get("CapMVRVCur")),
+            "market_cap_usd": _float(market_cap_row.get("CapMrktCurUSD")),
+            "price_usd": _float(price_row.get("PriceUSD")),
+            "_source": "Coin Metrics Community: CapMVRVCur + CapMrktCurUSD + PriceUSD",
+            "_observed_at": max(
+                (row.get("time") for row in (mvrv_row, market_cap_row, price_row) if row.get("time")),
+                default=None,
+            ),
         }
         valuation = {k: v for k, v in valuation.items() if v is not None}
 
-        exchange_in = _float(latest.get("FlowInExNtv"))
-        exchange_out = _float(latest.get("FlowOutExNtv"))
+        exchange_in = _float(exchange_flow_row.get("FlowInExNtv"))
+        exchange_out = _float(exchange_flow_row.get("FlowOutExNtv"))
         capital_flow = {
             "exchange_netflow_eth": exchange_in - exchange_out if exchange_in is not None and exchange_out is not None else None,
             "exchange_inflow_eth": exchange_in,
             "exchange_outflow_eth": exchange_out,
-            "exchange_inflow_usd": _float(latest.get("FlowInExUSD")),
-            "exchange_outflow_usd": _float(latest.get("FlowOutExUSD")),
+            "exchange_inflow_usd": _float(exchange_flow_row.get("FlowInExUSD")),
+            "exchange_outflow_usd": _float(exchange_flow_row.get("FlowOutExUSD")),
             "_source": "Coin Metrics Community: FlowInExNtv + FlowOutExNtv",
-            "_observed_at": observed_at,
+            "_observed_at": exchange_flow_row.get("time"),
         }
         capital_flow = {k: v for k, v in capital_flow.items() if v is not None}
 
-        supply_now = _float(latest.get("SplyCur"))
-        supply_prev = _float(previous.get("SplyCur"))
-        exchange_now = _float(latest.get("SplyExNtv"))
-        exchange_prev = _float(previous.get("SplyExNtv"))
+        supply_now = _float(supply_latest.get("SplyCur"))
+        supply_prev = _float(supply_previous.get("SplyCur"))
+        exchange_now = _float(exchange_latest.get("SplyExNtv"))
+        exchange_prev = _float(exchange_previous.get("SplyExNtv"))
         structural = {
             "net_issuance_eth": supply_now - supply_prev if supply_now is not None and supply_prev is not None else None,
             "exchange_balance_change_pct": (
@@ -190,12 +224,19 @@ def _coinmetrics_community_state() -> dict:
                 else None
             ),
             "exchange_balance_eth": exchange_now,
-            "active_addresses": _float(latest.get("AdrActCnt")),
-            "network_fees_eth": _float(latest.get("FeeTotNtv")),
-            "transaction_count": _float(latest.get("TxCnt")),
-            "gross_issuance_eth": _float(latest.get("IssTotNtv")),
+            "active_addresses": _float(activity_row.get("AdrActCnt")),
+            "network_fees_eth": _float(fees_row.get("FeeTotNtv")),
+            "transaction_count": _float(tx_row.get("TxCnt")),
+            "gross_issuance_eth": _float(issuance_row.get("IssTotNtv")),
             "_source": "Coin Metrics Community: SplyCur + SplyExNtv + AdrActCnt + FeeTotNtv + TxCnt + IssTotNtv",
-            "_observed_at": observed_at,
+            "_observed_at": max(
+                (
+                    row.get("time")
+                    for row in (supply_latest, exchange_latest, activity_row, fees_row, tx_row, issuance_row)
+                    if row.get("time")
+                ),
+                default=None,
+            ),
         }
         structural = {k: v for k, v in structural.items() if v is not None}
         return {"valuation": valuation, "capital_flow": capital_flow, "structural": structural}
@@ -205,6 +246,56 @@ def _coinmetrics_community_state() -> dict:
     except Exception as exc:
         err = {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "Coin Metrics Community"}
         return {"valuation": dict(err), "capital_flow": dict(err), "structural": dict(err)}
+
+
+def _defillama_eth_tvl_state() -> dict:
+    """Credential-free Ethereum DeFi TVL level and daily change."""
+    try:
+        response = requests.get(DEFILLAMA_ETH_TVL_URL, timeout=20)
+        if not response.ok:
+            err = _safe_http_error(response, "DEFILLAMA_TVL_HTTP_ERROR")
+            return {"valuation": dict(err), "capital_flow": dict(err)}
+        rows = response.json()
+        if not isinstance(rows, list):
+            err = {"_error": "DEFILLAMA_TVL_INVALID_RESULT", "_source": "DefiLlama"}
+            return {"valuation": dict(err), "capital_flow": dict(err)}
+        usable = []
+        for row in rows:
+            tvl = _float((row or {}).get("tvl"))
+            try:
+                stamp = int((row or {}).get("date"))
+            except (TypeError, ValueError):
+                continue
+            if tvl is not None and tvl > 0:
+                usable.append((stamp, tvl))
+        if len(usable) < 2:
+            err = {"_error": "DEFILLAMA_TVL_INSUFFICIENT_HISTORY", "_source": "DefiLlama"}
+            return {"valuation": dict(err), "capital_flow": dict(err)}
+        usable.sort(key=lambda item: item[0])
+        (_, previous), (latest_ts, current) = usable[-2], usable[-1]
+        observed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(latest_ts))
+        change = current - previous
+        source = "DefiLlama: Ethereum historical chain TVL"
+        return {
+            "valuation": {
+                "defi_tvl_usd": current,
+                "_source": source,
+                "_observed_at": observed_at,
+            },
+            "capital_flow": {
+                "defi_tvl_usd": current,
+                "defi_tvl_change_usd": change,
+                "defi_tvl_change_pct": (current / previous - 1.0) * 100.0 if previous else None,
+                "_source": source,
+                "_observed_at": observed_at,
+            },
+        }
+    except requests.RequestException as exc:
+        err = {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "DefiLlama"}
+        return {"valuation": dict(err), "capital_flow": dict(err)}
+    except Exception as exc:
+        err = {"_error": type(exc).__name__, "message": str(exc)[:300], "_source": "DefiLlama"}
+        return {"valuation": dict(err), "capital_flow": dict(err)}
 
 
 def _parse_farside_amount_musd(value: str):
@@ -545,8 +636,8 @@ def collect_external_state() -> dict:
     """Collect ETH-native state with explicit adapters > free baseline > optional Dune enrichment.
 
     Public baseline providers require no credentials:
-    - Coin Metrics Community: MVRV, current/exchange supply, network activity.
-    - DefiLlama: Ethereum stablecoin circulating-supply change.
+    - Coin Metrics Community: MVRV, market cap, current/exchange supply, network activity.
+    - DefiLlama: Ethereum DeFi TVL and stablecoin circulating-supply change.
     - Farside Investors: best-effort US spot ETH ETF daily total net flow.
 
     Dune remains optional enrichment for CEX/staking flow semantics. A Dune failure is
@@ -554,16 +645,30 @@ def collect_external_state() -> dict:
     public metric is available. Missing metrics stay missing; no zero-value imputation.
     """
     cm = _coinmetrics_community_state()
+    tvl = _defillama_eth_tvl_state()
     llama = _defillama_stablecoin_state()
     farside = _farside_eth_etf_state()
     beacon_queue = _beaconchain_queue_state()
     result = {
-        "valuation": dict(cm.get("valuation") or {}),
+        "valuation": {},
         "capital_flow": {},
         "structural": {},
     }
+    result["valuation"] = _merge_dimension(
+        result["valuation"], cm.get("valuation") or {}, "coinmetrics"
+    )
+    result["valuation"] = _merge_dimension(
+        result["valuation"], tvl.get("valuation") or {}, "defillama-tvl"
+    )
+    market_cap = _float(result["valuation"].get("market_cap_usd"))
+    defi_tvl = _float(result["valuation"].get("defi_tvl_usd"))
+    if market_cap is not None and defi_tvl not in (None, 0):
+        result["valuation"]["mcap_to_tvl"] = market_cap / defi_tvl
     result["capital_flow"] = _merge_dimension(
         result["capital_flow"], cm.get("capital_flow") or {}, "coinmetrics"
+    )
+    result["capital_flow"] = _merge_dimension(
+        result["capital_flow"], tvl.get("capital_flow") or {}, "defillama-tvl"
     )
     result["capital_flow"] = _merge_dimension(
         result["capital_flow"], llama.get("capital_flow") or {}, "defillama"
