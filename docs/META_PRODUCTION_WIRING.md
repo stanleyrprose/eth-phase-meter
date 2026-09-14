@@ -72,6 +72,25 @@ Files:
 
 A failed TradingAgents execution does not mark the GitHub monitor run as processed, so a later scheduler invocation can retry the same source artifact.
 
+## Runtime deployment/update
+
+From a development checkout, the normal one-command deployment or update is:
+
+```bash
+/opt/anaconda3/bin/python scripts/deploy_mac_meta_runtime.py
+```
+
+On first bootstrap, provide the existing TradingAgents environment file; it is copied into the clean runtime with owner-only permissions:
+
+```bash
+/opt/anaconda3/bin/python scripts/deploy_mac_meta_runtime.py \
+  --tradingagents-env-source /path/to/TradingAgents/.env
+```
+
+Dependency installation is skipped when the virtual environment is complete and the dependency manifests are unchanged. Use `--refresh-deps` to force an editable dependency reinstall; an incomplete virtual environment is always repaired in place and synchronized.
+
+The default smoke checks TradingAgents detect-only readiness, Codex login, and the latest successful GitHub monitor run, then temporarily launches the local pipeline with `--help` under `launchd`. It does **not** run a full TradingAgents graph and does **not** kickstart the production pipeline. Add `--kickstart-production` only when the deployment should explicitly start the installed production LaunchAgent immediately after all checks pass.
+
 ## Change-only Telegram notification
 
 The first Meta recommendation establishes a baseline without sending. Later runs send only when the recommendation differs from the last successfully notified recommendation. Telegram delivery is fail-open: a transient failure leaves the notification baseline unchanged for a later retry while the market-decision pipeline remains successful. If credentials are absent, the run records `SKIPPED_UNCONFIGURED` and advances the baseline so enabling Telegram later does not replay old changes.
