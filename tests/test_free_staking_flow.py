@@ -70,7 +70,7 @@ def test_staking_flow_uses_prior_canonical_pit_and_adds_independent_structural_v
         volatility=20,
     )
     state = build_market_state({"valuation": {}, "capital_flow": {}, "structural": structural}, result)
-    assert state["dimensions"]["structural_supply"]["coverage"] == 75.0
+    assert state["dimensions"]["structural_supply"]["coverage"] == 100.0
 
 
 def test_staking_flow_fails_closed_on_counter_regression():
