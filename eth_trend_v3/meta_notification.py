@@ -37,6 +37,7 @@ def format_meta_notification(meta: Mapping) -> str:
     sources = meta.get("sources") or {}
     tradingagents = sources.get("tradingagents") or {}
     phase = sources.get("phase_meter") or {}
+    kronos = sources.get("kronos") or {}
     one_hour = phase.get("1h") or {}
     four_hour = phase.get("4h") or {}
     previous = meta.get("_notification_previous_recommendation") or "UNKNOWN"
@@ -51,6 +52,11 @@ def format_meta_notification(meta: Mapping) -> str:
                 "Phase："
                 f"1h {one_hour.get('direction', 'UNKNOWN')} / {one_hour.get('regime') or 'UNKNOWN'}；"
                 f"4h {four_hour.get('direction', 'UNKNOWN')} / {four_hour.get('regime') or 'UNKNOWN'}"
+            ),
+            (
+                "Kronos Shadow："
+                f"{kronos.get('bias') or 'UNAVAILABLE'} / "
+                f"{kronos.get('shadow_alignment') or 'UNAVAILABLE'}"
             ),
             f"生成时间：{meta.get('generated_at') or 'UNKNOWN'}",
         ]

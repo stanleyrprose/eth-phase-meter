@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
+from .kronos_evidence import compare_kronos_to_phase, validate_kronos_evidence
+
 
 META_CONTRACT_VERSION = "eth-meta-decision-v1"
 TRADINGAGENTS_CONTRACT_VERSION = "tradingagents-decision-v1"
@@ -86,6 +88,7 @@ def _is_fresh(
 def evaluate_meta_decision(
     monitor: dict[str, Any],
     tradingagents: dict[str, Any],
+    kronos: dict[str, Any] | None = None,
     *,
     minimum_coverage: float = 80.0,
     max_source_age_hours: float = 24.0,
@@ -137,6 +140,20 @@ def evaluate_meta_decision(
         now=current_time,
         max_age_hours=max_source_age_hours,
     )
+    kronos_validated = (
+        validate_kronos_evidence(kronos, now=current_time, max_age_hours=max_source_age_hours)
+        if kronos
+        else {
+            "usable": False,
+            "fresh": False,
+            "shadow_only": True,
+            "bias": "UNAVAILABLE",
+            "preferred_direction_score": None,
+            "horizons": {},
+            "reason_codes": ["KRONOS_NOT_AVAILABLE"],
+        }
+    )
+    kronos_shadow_alignment = compare_kronos_to_phase(monitor, kronos_validated)
 
     strong_phase_conflict = d1 * d4 < 0 and abs(d1) >= 20 and abs(d4) >= 20
     cross_system_conflict = (ta_side > 0 and d4 <= -20) or (ta_side < 0 and d4 >= 20)
@@ -223,6 +240,14 @@ def evaluate_meta_decision(
             else:
                 reasons.append("NO_CROSS_SYSTEM_EDGE")
 
+    if kronos_validated.get("usable"):
+        if kronos_shadow_alignment == "SUPPORTS":
+            reasons.append("KRONOS_SHADOW_SUPPORTS_PHASE")
+        elif kronos_shadow_alignment == "CONFLICTS":
+            reasons.append("KRONOS_SHADOW_CONFLICTS_WITH_PHASE")
+        elif kronos_shadow_alignment == "MIXED":
+            reasons.append("KRONOS_SHADOW_MIXED")
+
     if recommendation in {"ADD", "REDUCE"}:
         alignment = "HIGH"
     elif recommendation == "HOLD" and not cross_system_conflict and not strong_phase_conflict:
@@ -265,11 +290,29 @@ def evaluate_meta_decision(
                     "volatility_risk": volatility4,
                 },
             },
+            "kronos": {
+                "contract_version": (kronos or {}).get("contract_version"),
+                "generated_at": (kronos or {}).get("generated_at"),
+                "model": (kronos or {}).get("model"),
+                "fresh": kronos_validated.get("fresh"),
+                "usable": kronos_validated.get("usable"),
+                "mode": (kronos or {}).get("mode"),
+                "bias": kronos_validated.get("bias"),
+                "preferred_direction_score": kronos_validated.get("preferred_direction_score"),
+                "shadow_alignment": kronos_shadow_alignment,
+                "horizons": kronos_validated.get("horizons"),
+                "validation_reasons": kronos_validated.get("reason_codes"),
+            },
+        },
+        "shadow_evidence": {
+            "kronos_alignment": kronos_shadow_alignment,
+            "kronos_decision_active": False,
         },
         "guardrails": {
             "forecast_probability_generated": False,
             "production_model_state_changed": False,
             "order_execution_allowed": False,
-            "note": "Decision support only; Direction and evidence alignment are not probabilities.",
+            "kronos_decision_active": False,
+            "note": "Decision support only; Phase/Kronos direction scores and evidence alignment are not probabilities.",
         },
     }
