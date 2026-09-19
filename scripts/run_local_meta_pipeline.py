@@ -19,7 +19,8 @@ from typing import Iterator
 GH_LIST_TIMEOUT_SECONDS = 30
 GH_DOWNLOAD_TIMEOUT_SECONDS = 120
 TRADINGAGENTS_TIMEOUT_SECONDS = 3600
-DEFAULT_WATCHDOG_SECONDS = 4200
+KRONOS_TIMEOUT_SECONDS = 1800
+DEFAULT_WATCHDOG_SECONDS = 5400
 TRACEBACK_DELAY_SECONDS = 60
 PROCESS_TERMINATION_GRACE_SECONDS = 2
 PROGRESS_FILENAME = "progress.jsonl"
@@ -70,6 +71,20 @@ def _read_json(path: Path) -> dict:
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+
+def _json_is_recent(payload: dict, *, max_age_hours: float) -> bool:
+    value = payload.get("generated_at")
+    if not value:
+        return False
+    try:
+        stamp = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=dt.timezone.utc)
+    age = (dt.datetime.now(dt.timezone.utc) - stamp.astimezone(dt.timezone.utc)).total_seconds()
+    return -300 <= age <= max_age_hours * 3600
 
 
 def _signal_process_tree(process: subprocess.Popen[str], sig: signal.Signals) -> None:
@@ -249,6 +264,92 @@ def _run_tradingagents(repo: Path, python: str, analysis_date: str, decision_pat
         raise RuntimeError("TRADINGAGENTS_DECISION_NOT_WRITTEN")
 
 
+def _kronos_python(repo: Path, explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    venv_python = repo / ".venv" / "bin" / "python"
+    if not venv_python.exists():
+        raise RuntimeError(f"KRONOS_PYTHON_MISSING: {venv_python}")
+    return str(venv_python)
+
+
+def _prepare_kronos_inputs(state_dir: Path) -> tuple[Path, Path]:
+    import pandas as pd
+    import github_actions_runner as market
+
+    now = dt.datetime.now(dt.timezone.utc)
+    outputs: list[Path] = []
+    for timeframe, seconds in (("1h", 3600), ("4h", 4 * 3600)):
+        candles = market.fetch_market_klines(interval=timeframe, limit=220)
+        if candles is None or len(candles) < 50:
+            raise RuntimeError(f"KRONOS_CANDLES_UNAVAILABLE: timeframe={timeframe}")
+        frame = candles.copy()
+        stamps = frame["open_time"]
+        if getattr(stamps.dtype, "kind", "") in {"i", "u", "f"}:
+            timestamps = pd.to_datetime(stamps, unit="ms", utc=True)
+        else:
+            timestamps = pd.to_datetime(stamps, utc=True)
+        cutoff_seconds = (int(now.timestamp()) // seconds) * seconds
+        cutoff = pd.Timestamp(cutoff_seconds, unit="s", tz="UTC")
+        frame = frame.assign(timestamps=timestamps)
+        frame = frame[frame["timestamps"] < cutoff].copy()
+        if len(frame) < 50:
+            raise RuntimeError(f"KRONOS_CLOSED_CANDLES_TOO_SHORT: timeframe={timeframe} rows={len(frame)}")
+        if "quote_vol" in frame:
+            amount = frame["quote_vol"].astype(float)
+        else:
+            amount = frame["volume"].astype(float) * frame["close"].astype(float)
+        export = frame.assign(amount=amount)[
+            ["timestamps", "open", "high", "low", "close", "volume", "amount"]
+        ].tail(220)
+        output = state_dir / f"kronos_input_{timeframe}.csv"
+        export.to_csv(output, index=False)
+        outputs.append(output)
+    return outputs[0], outputs[1]
+
+
+def _run_kronos_shadow(
+    *,
+    repo_root: Path,
+    kronos_repo: Path,
+    python: str,
+    state_dir: Path,
+    evidence_path: Path,
+    model: str,
+    sample_count: int,
+) -> None:
+    runner = repo_root / "scripts" / "run_kronos_shadow.py"
+    if not runner.exists():
+        raise RuntimeError(f"KRONOS_RUNNER_MISSING: {runner}")
+    input_1h, input_4h = _prepare_kronos_inputs(state_dir)
+    completed = _run(
+        [
+            python,
+            str(runner),
+            "--kronos-repo",
+            str(kronos_repo),
+            "--input-1h",
+            str(input_1h),
+            "--input-4h",
+            str(input_4h),
+            "--output",
+            str(evidence_path),
+            "--model",
+            model,
+            "--sample-count",
+            str(sample_count),
+        ],
+        cwd=repo_root,
+        timeout=KRONOS_TIMEOUT_SECONDS,
+        timeout_code="KRONOS_TIMEOUT",
+    )
+    if completed.returncode != 0:
+        tail = (completed.stderr or completed.stdout or "")[-2000:]
+        raise RuntimeError(f"KRONOS_RUN_FAILED: {tail.strip()}")
+    if not evidence_path.exists():
+        raise RuntimeError("KRONOS_EVIDENCE_NOT_WRITTEN")
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Event-triggered local bridge from the latest GitHub ETH monitor artifact to TradingAgents."
@@ -265,6 +366,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=str(Path.home() / "Documents/mcpx-projects/TradingAgents-codex-oauth"),
     )
     parser.add_argument("--tradingagents-python")
+    parser.add_argument("--enable-kronos", action="store_true", help="enable research-only Kronos shadow evidence")
+    parser.add_argument(
+        "--kronos-repo",
+        default=str(Path.home() / ".openclaw/workspace/tools/eth-meta-runtime/Kronos"),
+    )
+    parser.add_argument("--kronos-python")
+    parser.add_argument("--kronos-model", choices=("mini", "small", "base"), default="small")
+    parser.add_argument("--kronos-sample-count", type=int, default=3)
     parser.add_argument("--gh", help="path to GitHub CLI; auto-detected when omitted")
     parser.add_argument(
         "--monitor-file",
@@ -275,7 +384,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--watchdog-seconds",
         type=float,
         default=DEFAULT_WATCHDOG_SECONDS,
-        help="whole-pipeline POSIX watchdog in seconds; use 0 to disable (default: 4200)",
+        help="whole-pipeline POSIX watchdog in seconds; use 0 to disable (default: 5400)",
     )
     parser.add_argument(
         "--telegram-secret-file",
@@ -285,6 +394,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.watchdog_seconds < 0:
         parser.error("--watchdog-seconds must be non-negative")
+    if args.kronos_sample_count < 1:
+        parser.error("--kronos-sample-count must be >= 1")
     return args
 
 
@@ -292,10 +403,16 @@ def _execute_pipeline(args: argparse.Namespace, progress: ProgressLogger) -> int
     evaluate_meta_decision, evaluate_trigger, process_notification = _load_components()
     progress.emit("components_loaded")
     state_dir = Path(args.state_dir).expanduser().resolve()
+    kronos_repo_path = Path(args.kronos_repo).expanduser().resolve()
+    default_state_dir = (Path.home() / ".eth-meta-pipeline").resolve()
+    kronos_enabled = bool(
+        args.enable_kronos or (state_dir == default_state_dir and kronos_repo_path.exists())
+    )
     state_path = state_dir / "state.json"
     previous_monitor_path = state_dir / "latest_monitor.json"
     decision_path = state_dir / "tradingagents_decision.json"
     trigger_path = state_dir / "tradingagents_trigger.json"
+    kronos_path = state_dir / "kronos_evidence.json"
     meta_path = state_dir / "meta_decision.json"
     state = _read_json(state_path)
 
@@ -358,6 +475,50 @@ def _execute_pipeline(args: argparse.Namespace, progress: ProgressLogger) -> int
         print(f"Meta Pipeline: DEFER | reasons={','.join(trigger['reason_codes'])}")
         return 0
 
+    kronos_evidence = _read_json(kronos_path)
+    if kronos_enabled:
+        refresh_kronos = trigger["action"] == "RUN" or not _json_is_recent(
+            kronos_evidence, max_age_hours=12.0
+        )
+        if refresh_kronos:
+            progress.emit("kronos_started", run_id=run_id, model=args.kronos_model)
+            try:
+                kronos_repo = Path(args.kronos_repo).expanduser().resolve()
+                kronos_python = _kronos_python(kronos_repo, args.kronos_python)
+                _run_kronos_shadow(
+                    repo_root=_repo_root(),
+                    kronos_repo=kronos_repo,
+                    python=kronos_python,
+                    state_dir=state_dir,
+                    evidence_path=kronos_path,
+                    model=args.kronos_model,
+                    sample_count=args.kronos_sample_count,
+                )
+                kronos_evidence = _read_json(kronos_path)
+                progress.emit("kronos_completed", run_id=run_id, model=args.kronos_model)
+            except Exception as exc:
+                kronos_evidence = {
+                    "contract_version": "kronos-evidence-v1",
+                    "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "asset": "ETH-USD",
+                    "mode": "SHADOW",
+                    "horizons": {},
+                    "error": str(exc).splitlines()[-1][:500],
+                    "guardrails": {
+                        "decision_active": False,
+                        "probability_generated": False,
+                        "order_execution_allowed": False,
+                    },
+                }
+                _write_json(kronos_path, kronos_evidence)
+                progress.emit(
+                    "kronos_failed_open",
+                    run_id=run_id,
+                    error_code=str(exc).split(":", 1)[0] or type(exc).__name__,
+                )
+        else:
+            progress.emit("kronos_reused", run_id=run_id)
+
     if trigger["action"] == "RUN":
         ta_repo = Path(args.tradingagents_repo).expanduser().resolve()
         ta_python = _tradingagents_python(ta_repo, args.tradingagents_python)
@@ -366,13 +527,16 @@ def _execute_pipeline(args: argparse.Namespace, progress: ProgressLogger) -> int
         progress.emit("tradingagents_completed", run_id=run_id)
 
     decision = _read_json(decision_path)
-    meta = evaluate_meta_decision(monitor, decision)
+    meta = evaluate_meta_decision(monitor, decision, kronos_evidence if kronos_enabled else None)
     progress.emit("meta_decision_completed", recommendation=meta["recommendation"], run_id=run_id)
     meta["pipeline"] = {
         "monitor_run_id": run_id,
         "monitor_git_sha": run_sha,
         "ta_trigger_action": trigger["action"],
         "ta_trigger_reasons": trigger["reason_codes"],
+        "kronos_enabled": kronos_enabled,
+        "kronos_mode": "SHADOW" if kronos_enabled else "DISABLED",
+        "kronos_model": args.kronos_model if kronos_enabled else None,
     }
     notification, last_notified = process_notification(
         meta,

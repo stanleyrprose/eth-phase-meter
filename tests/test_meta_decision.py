@@ -46,8 +46,34 @@ def _ta(decision="HOLD", symbol="ETH-USD", generated_at="2026-09-13T01:00:00+00:
     }
 
 
-def _evaluate(monitor, tradingagents):
-    return evaluate_meta_decision(monitor, tradingagents, now=_NOW)
+def _kronos(score4=30.0):
+    return {
+        "contract_version": "kronos-evidence-v1",
+        "generated_at": "2026-09-13T01:00:00+00:00",
+        "asset": "ETH-USD",
+        "mode": "SHADOW",
+        "model": {"name": "Kronos-small"},
+        "horizons": {
+            "1h": {
+                "direction_score": 20.0,
+                "median_terminal_return_pct": 1.0,
+                "sample_count": 3,
+                "pred_len": 12,
+                "lookback": 160,
+            },
+            "4h": {
+                "direction_score": score4,
+                "median_terminal_return_pct": 2.0 if score4 >= 0 else -2.0,
+                "sample_count": 3,
+                "pred_len": 18,
+                "lookback": 120,
+            },
+        },
+    }
+
+
+def _evaluate(monitor, tradingagents, kronos=None):
+    return evaluate_meta_decision(monitor, tradingagents, kronos, now=_NOW)
 
 
 def test_current_like_state_stays_hold_without_inventing_probability():
@@ -135,3 +161,28 @@ def test_unknown_tradingagents_decision_fails_closed_to_avoid():
     result = _evaluate(monitor, _ta("WATCH"))
     assert result["recommendation"] == "AVOID"
     assert "TRADINGAGENTS_DECISION_UNKNOWN" in result["reason_codes"]
+
+
+def test_kronos_shadow_support_is_visible_but_does_not_promote_hold():
+    monitor = {
+        "1h": _snapshot(25, momentum=35, order_flow=25),
+        "4h": _snapshot(38, momentum=45, order_flow=50),
+    }
+    result = _evaluate(monitor, _ta("HOLD"), _kronos(score4=40))
+    assert result["recommendation"] == "HOLD"
+    assert result["shadow_evidence"]["kronos_alignment"] == "SUPPORTS"
+    assert result["shadow_evidence"]["kronos_decision_active"] is False
+    assert "KRONOS_SHADOW_SUPPORTS_PHASE" in result["reason_codes"]
+    assert result["sources"]["kronos"]["usable"] is True
+    assert result["guardrails"]["kronos_decision_active"] is False
+
+
+def test_kronos_shadow_conflict_is_visible_but_does_not_override_meta_decision():
+    monitor = {
+        "1h": _snapshot(25, momentum=35, order_flow=25),
+        "4h": _snapshot(38, momentum=45, order_flow=50),
+    }
+    result = _evaluate(monitor, _ta("HOLD"), _kronos(score4=-40))
+    assert result["recommendation"] == "HOLD"
+    assert result["shadow_evidence"]["kronos_alignment"] == "CONFLICTS"
+    assert "KRONOS_SHADOW_CONFLICTS_WITH_PHASE" in result["reason_codes"]
