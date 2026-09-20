@@ -303,6 +303,15 @@ def apply_execution_gate(results):
         r1.execution_reason = f"4h={d4:+d}"
 
 
+def _send_tactical_1h(result, payload_1h, payload_4h):
+    text = tactical_summary(result)
+    print(text)
+    notification = core.send_tg_message(text)
+    payload_1h["notification"] = notification
+    payload_4h["execution_gate_notification"] = notification
+    return notification
+
+
 def main():
     history = load_pit_records(os.getenv("DATABASE_URL"))
     r4, p4 = run_one("4h", history)
@@ -328,13 +337,9 @@ def main():
     manifest["external_persisted"] = persist_json_record("run_manifest", manifest)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    tactical_text = tactical_summary(r1)
-    print(tactical_text)
-    tactical_notification = core.send_tg_message(tactical_text)
-    p1["notification"] = tactical_notification
+    tactical_notification = _send_tactical_1h(r1, p1, p4)
     persist_json_record("monitor_state_1h", p1)
     (OUTPUT / "v3_snapshot_1h.json").write_text(json.dumps(p1, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    p4["execution_gate_notification"] = tactical_notification
     persist_json_record("monitor_state_4h", p4)
     (OUTPUT / "v3_snapshot_4h.json").write_text(json.dumps(p4, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     summary["notification"] = {
