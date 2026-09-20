@@ -95,6 +95,11 @@ def _run_horizon(
     frame, timestamps = _load_frame(input_path, lookback)
     future = _future_timestamps(timestamps.iloc[-1], timeframe, pred_len)
     last_close = float(frame.iloc[-1]["close"])
+    momentum_bars = min(6, len(frame) - 1)
+    momentum_start = float(frame.iloc[-1 - momentum_bars]["close"])
+    trailing_momentum_return_pct = (
+        (last_close / momentum_start - 1.0) * 100.0 if momentum_start > 0 else None
+    )
     returns: list[float] = []
     end_closes: list[float] = []
     path_ranges: list[float] = []
@@ -137,6 +142,12 @@ def _run_horizon(
         "terminal_return_std_pct": round(float(np.std(returns)), 6),
         "up_sample_share_pct": round(positive_share, 3),
         "sample_directional_agreement_pct": round(directional_agreement, 3),
+        "trailing_momentum_bars": momentum_bars,
+        "trailing_momentum_return_pct": (
+            round(float(trailing_momentum_return_pct), 6)
+            if trailing_momentum_return_pct is not None
+            else None
+        ),
         "median_terminal_close": round(float(np.median(end_closes)), 6),
         "mean_path_range_pct": round(float(np.mean(path_ranges)), 6),
         "direction_score": _direction_score(median_return, scale),

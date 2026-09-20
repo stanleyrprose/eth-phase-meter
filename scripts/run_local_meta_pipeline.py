@@ -350,6 +350,63 @@ def _run_kronos_shadow(
         raise RuntimeError("KRONOS_EVIDENCE_NOT_WRITTEN")
 
 
+def _update_kronos_research(
+    *,
+    state_dir: Path,
+    monitor: dict,
+    decision: dict,
+    kronos_evidence: dict,
+    meta: dict,
+    run_id: int | str,
+    run_sha: str | None,
+) -> dict:
+    from eth_trend_v3.kronos_research import (
+        append_kronos_pit,
+        build_kronos_pit_record,
+        evaluate_kronos_pit,
+        load_kronos_pit,
+        resolve_kronos_outcomes,
+    )
+    import github_actions_runner as market
+
+    pit_path = state_dir / "kronos_pit.jsonl"
+    report_path = state_dir / "kronos_research_report.json"
+    appended = False
+    resolved = 0
+
+    if kronos_evidence.get("horizons"):
+        record = build_kronos_pit_record(
+            monitor=monitor,
+            tradingagents=decision,
+            kronos=kronos_evidence,
+            meta=meta,
+            monitor_run_id=run_id,
+            monitor_git_sha=run_sha,
+        )
+        appended = append_kronos_pit(pit_path, record)
+
+    candles_by_timeframe = {}
+    for timeframe in ("1h", "4h"):
+        candles = market.fetch_market_klines(interval=timeframe, limit=220)
+        if candles is not None and len(candles) >= 2:
+            candles_by_timeframe[timeframe] = candles
+    if candles_by_timeframe:
+        resolved = resolve_kronos_outcomes(
+            pit_path,
+            candles_by_timeframe=candles_by_timeframe,
+        )
+
+    report = evaluate_kronos_pit(load_kronos_pit(pit_path))
+    _write_json(report_path, report)
+    return {
+        "pit_path": str(pit_path),
+        "report_path": str(report_path),
+        "appended": appended,
+        "resolved_outcomes": resolved,
+        "record_count": len(load_kronos_pit(pit_path)),
+    }
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Event-triggered local bridge from the latest GitHub ETH monitor artifact to TradingAgents."
@@ -538,6 +595,36 @@ def _execute_pipeline(args: argparse.Namespace, progress: ProgressLogger) -> int
         "kronos_mode": "SHADOW" if kronos_enabled else "DISABLED",
         "kronos_model": args.kronos_model if kronos_enabled else None,
     }
+    if kronos_enabled:
+        progress.emit("kronos_research_started", run_id=run_id)
+        try:
+            research = _update_kronos_research(
+                state_dir=state_dir,
+                monitor=monitor,
+                decision=decision,
+                kronos_evidence=kronos_evidence,
+                meta=meta,
+                run_id=run_id,
+                run_sha=run_sha,
+            )
+            research["status"] = "OK"
+            meta["pipeline"]["kronos_research"] = research
+            progress.emit(
+                "kronos_research_completed",
+                run_id=run_id,
+                appended=research["appended"],
+                resolved_outcomes=research["resolved_outcomes"],
+            )
+        except Exception as exc:
+            meta["pipeline"]["kronos_research"] = {
+                "status": "FAILED_OPEN",
+                "error_code": str(exc).split(":", 1)[0] or type(exc).__name__,
+            }
+            progress.emit(
+                "kronos_research_failed_open",
+                run_id=run_id,
+                error_code=str(exc).split(":", 1)[0] or type(exc).__name__,
+            )
     notification, last_notified = process_notification(
         meta,
         state,
