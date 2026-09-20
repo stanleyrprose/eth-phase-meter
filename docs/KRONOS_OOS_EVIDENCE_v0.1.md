@@ -64,6 +64,23 @@ The 90-bar sensitivity check performed better on directional hit rate than the c
 
 Changing the parameter after observing the result would introduce selection bias. Lookback 90 is instead recorded as a candidate for a future preregistered holdout/prospective comparison.
 
+## Subperiod stability
+
+The same 120 OOS points were split into 2024H2, 2025, and 2026 YTD without rerunning or retuning the model.
+
+| Lookback | Period | n | Kronos direction hit | Momentum hit | Kronos MAE | Persistence MAE |
+|---|---|---:|---:|---:|---:|---:|
+| 120 | 2024H2 | 28 | 64.29% | 46.43% | 5.6807% | 4.9595% |
+| 120 | 2025 | 53 | 49.06% | 60.38% | 5.2876% | 4.9806% |
+| 120 | 2026 YTD | 39 | 58.97% | 38.46% | 5.0794% | 4.9663% |
+| 90 | 2024H2 | 28 | 60.71% | 46.43% | 5.2191% | 4.9595% |
+| 90 | 2025 | 53 | 54.72% | 60.38% | 5.3969% | 4.9806% |
+| 90 | 2026 YTD | 39 | 61.54% | 38.46% | 4.8651% | 4.9663% |
+
+This strengthens the case for keeping Kronos in shadow mode. The 120-bar configuration is clearly unstable across subperiods, including a sub-50% hit rate in 2025. The 90-bar sensitivity is directionally more stable, but its price MAE is worse than persistence in 2024H2 and 2025 and only slightly better in 2026 YTD.
+
+No production parameter is changed from this result. Lookback 90 remains a future preregistered candidate rather than a post-hoc promoted setting.
+
 ## Prospective PIT evidence
 
 Historical OHLCV can evaluate Kronos, persistence, and momentum.
