@@ -116,7 +116,11 @@ def build_pit_record(
         "workflow_name": os.getenv("GITHUB_WORKFLOW", "local"),
         "workflow_run_id": os.getenv("GITHUB_RUN_ID", "local"),
         "workflow_run_attempt": os.getenv("GITHUB_RUN_ATTEMPT", "1"),
-        "schedule_nominal_time": _schedule_nominal_time(now),
+        "schedule_nominal_time": _schedule_nominal_time(
+            now,
+            cadence_hours=1 if timeframe == "1h" else 4,
+            minute=25 if timeframe == "1h" else 15,
+        ),
     }
 
 

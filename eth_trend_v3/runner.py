@@ -244,6 +244,9 @@ def run_one(timeframe, history_records):
         "timeframe": timeframe,
         "price": result.price,
         "rule_direction": result.final_direction,
+        "available_bias": result.available_bias,
+        "tactical_state": result.state,
+        "rule_regime": result.regime,
         "coverage": result.coverage,
         "market_state": market_state,
         "feature_clusters": clusters,
@@ -287,46 +290,49 @@ def run_one(timeframe, history_records):
     return result, payload
 
 
+def apply_4h_confirmation(result_1h, direction_4h: int):
+    d1, d4 = result_1h.final_direction, int(direction_4h)
+    if abs(d1) >= 20 and abs(d4) >= 20 and d1 * d4 < 0:
+        result_1h.execution_gate = "BLOCKED"
+        result_1h.execution_reason = f"1h与4h方向冲突 (1h={d1:+d}, 4h={d4:+d})"
+    elif abs(d1) >= 20 and abs(d4) < 20:
+        result_1h.execution_gate = "WAIT"
+        result_1h.execution_reason = f"4h方向证据不足 ({d4:+d})"
+    else:
+        result_1h.execution_gate = "PASS"
+        result_1h.execution_reason = f"4h={d4:+d}"
+    return result_1h
+
+
 def apply_execution_gate(results):
     r1, r4 = results.get("1h"), results.get("4h")
     if not r1 or not r4:
         return
-    d1, d4 = r1.final_direction, r4.final_direction
-    if abs(d1) >= 20 and abs(d4) >= 20 and d1 * d4 < 0:
-        r1.execution_gate = "BLOCKED"
-        r1.execution_reason = f"1h与4h方向冲突 (1h={d1:+d}, 4h={d4:+d})"
-    elif abs(d1) >= 20 and abs(d4) < 20:
-        r1.execution_gate = "WAIT"
-        r1.execution_reason = f"4h方向证据不足 ({d4:+d})"
-    else:
-        r1.execution_gate = "PASS"
-        r1.execution_reason = f"4h={d4:+d}"
+    apply_4h_confirmation(r1, r4.final_direction)
 
 
-def _send_tactical_1h(result, payload_1h, payload_4h):
-    text = tactical_summary(result)
-    print(text)
-    notification = core.send_tg_message(text)
+def _send_tactical_1h(result, payload_1h, triggers=None):
+    message = tactical_summary(result)
+    if triggers:
+        message += "\n🔔 Trigger: " + "; ".join(triggers)
+    print(message)
+    notification = core.send_tg_message(message)
     payload_1h["notification"] = notification
-    payload_4h["execution_gate_notification"] = notification
     return notification
 
 
 def main():
     history = load_pit_records(os.getenv("DATABASE_URL"))
     r4, p4 = run_one("4h", history)
-    r1, p1 = run_one("1h", history)
-    results = {"4h": r4, "1h": r1}
-    apply_execution_gate(results)
 
-    summary = {"4h": p4, "1h": p1}
+    summary = {"4h": p4}
     (OUTPUT / "latest_monitor.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     write_dashboard(OUTPUT, p4)
 
     manifest_path = write_run_manifest(
-        OUTPUT, results,
+        OUTPUT, {"4h": r4},
         extra={
-            "data_health": {"4h": p4["data_health"]["status"], "1h": p1["data_health"]["status"]},
+            "data_health": {"4h": p4["data_health"]["status"]},
             "forecast_status": {h: v["status"] for h, v in p4["forecasts"].items()},
             "model_reliability": p4["model_reliability"],
             "model_health": p4["model_health"]["status"],
@@ -337,16 +343,7 @@ def main():
     manifest["external_persisted"] = persist_json_record("run_manifest", manifest)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    tactical_notification = _send_tactical_1h(r1, p1, p4)
-    persist_json_record("monitor_state_1h", p1)
-    (OUTPUT / "v3_snapshot_1h.json").write_text(json.dumps(p1, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    persist_json_record("monitor_state_4h", p4)
-    (OUTPUT / "v3_snapshot_4h.json").write_text(json.dumps(p4, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    summary["notification"] = {
-        "forecast_summary": p4.get("notification"),
-        "execution_gate": tactical_notification,
-        "tactical_1h": tactical_notification,
-    }
+    summary["notification"] = {"forecast_summary": p4.get("notification")}
     (OUTPUT / "latest_monitor.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return summary
 

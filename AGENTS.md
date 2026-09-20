@@ -323,13 +323,19 @@ Important workflows include:
 - `baseline-benchmark.yml`
 - HMM bootstrap/ablation workflows
 
-The production scheduled monitor runs every four hours via:
+The 4H strategic production monitor runs every four hours via:
 
 ```text
 15 */4 * * *
 ```
 
-It uses repository Secrets for credentials/data providers and uploads run artifacts.
+The 1H tactical monitor runs hourly via:
+
+```text
+25 * * * *
+```
+
+The 1H workflow persists every observation but sends Telegram only for significant state changes (direction-band/state/regime/gate transitions or material direction moves). It uses the latest persisted 4H state for confirmation. Both workflows use repository Secrets for credentials/data providers and upload run artifacts.
 
 Never commit secret values into workflow YAML, examples, tests, docs, logs, or reports.
 

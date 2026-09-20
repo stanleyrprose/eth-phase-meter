@@ -27,7 +27,6 @@ def main() -> None:
     primary = summary.get("4h") if isinstance(summary, dict) else None
     notification_status = {
         "forecast_summary": primary.get("notification") if isinstance(primary, dict) else None,
-        "execution_gate": primary.get("execution_gate_notification") if isinstance(primary, dict) else None,
     }
     report = validate_production_summary(
         summary,
