@@ -3,24 +3,24 @@ from types import SimpleNamespace
 import eth_trend_v3.runner as runner
 
 
-def test_send_tactical_1h_calls_telegram_and_records_compatibility_evidence(monkeypatch):
+def test_send_tactical_1h_calls_telegram_with_readable_change_summary(monkeypatch):
     result = SimpleNamespace(
-        timestamp="2026-09-20 12:00 UTC",
-        price=3200.0,
-        final_direction=18,
-        available_bias=24,
-        coverage=75.0,
-        confidence="Medium",
+        timestamp="2026-09-20 23:16 UTC",
+        price=2635.42,
+        final_direction=28,
+        available_bias=28,
+        coverage=98.0,
+        confidence="High",
         regime="TRANSITION",
-        crowding=42,
-        volatility=37,
-        state="NEUTRAL",
+        crowding=18,
+        volatility=22,
+        state="WEAK_BULL",
         factors=[
-            SimpleNamespace(name="MA", active=True, contribution=8.0),
-            SimpleNamespace(name="CVDTrend", active=True, contribution=-5.0),
+            SimpleNamespace(name="OptionSkew", active=True, contribution=6.0),
+            SimpleNamespace(name="Price×OI", active=True, contribution=-10.0),
         ],
-        execution_gate="WAIT",
-        execution_reason="4h方向证据不足 (+10)",
+        execution_gate="PASS",
+        execution_reason="4h=+56",
     )
     payload_1h = {}
     sent = []
@@ -31,11 +31,22 @@ def test_send_tactical_1h_calls_telegram_and_records_compatibility_evidence(monk
         lambda message: sent.append(message) or {"status": "SENT", "http_status": 200},
     )
 
-    status = runner._send_tactical_1h(result, payload_1h, triggers=["STATE: NEUTRAL→WEAK_BULL"])
+    status = runner._send_tactical_1h(
+        result,
+        payload_1h,
+        triggers=[
+            "DIRECTION_WEAKENING: +48→+28 (-20)",
+            "REGIME: TREND_UP→TRANSITION",
+        ],
+    )
 
     assert len(sent) == 1
     assert "ETH Tactical [1H]" in sent[0]
-    assert "4H Confirmation: <b>WAIT</b>" in sent[0]
+    assert "4H Confirmation: <b>PASS</b>" in sent[0]
+    assert "Tactical Change" in sent[0]
+    assert "Bullish momentum weakening" in sent[0]
+    assert "Direction: <b>+48 → +28 (-20)</b>" in sent[0]
+    assert "Regime: <b>TREND_UP→TRANSITION</b>" in sent[0]
+    assert "DIRECTION_WEAKENING:" not in sent[0]
     assert status["status"] == "SENT"
-    assert "Trigger: STATE: NEUTRAL→WEAK_BULL" in sent[0]
     assert payload_1h["notification"] == status

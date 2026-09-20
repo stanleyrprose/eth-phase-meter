@@ -30,6 +30,7 @@ from .runtime_model import frozen_inference
 from .production_control import evaluate_runtime_demotion
 from .shadow_forecast import new_shadow_record, persist_shadow
 from .structural_flow import enrich_staking_netflow
+from .tactical_alerts import notification_reasons, render_notification_reasons
 
 OUTPUT = Path(core.OUTPUT_DIR)
 
@@ -314,7 +315,7 @@ def apply_execution_gate(results):
 def _send_tactical_1h(result, payload_1h, triggers=None):
     message = tactical_summary(result)
     if triggers:
-        message += "\n🔔 Trigger: " + "; ".join(triggers)
+        message += "\n" + render_notification_reasons(triggers)
     print(message)
     notification = core.send_tg_message(message)
     payload_1h["notification"] = notification
@@ -331,8 +332,6 @@ def _process_tactical_1h(result, payload_1h, primary_4h, previous_1h):
         if not previous_1h:
             decision = {"status": "SKIPPED", "reason": "BASELINE_ESTABLISHED", "triggers": []}
         else:
-            from .tactical_alerts import notification_reasons
-
             triggers = notification_reasons(result, previous_1h)
             if triggers:
                 notification = _send_tactical_1h(result, payload_1h, triggers=triggers)

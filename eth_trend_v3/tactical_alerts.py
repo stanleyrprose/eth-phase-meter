@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 DIRECTION_THRESHOLD = 20
 MATERIAL_DIRECTION_DELTA = 15
@@ -11,6 +13,23 @@ def _direction_band(direction: int) -> str:
     if direction <= -DIRECTION_THRESHOLD:
         return "BEAR"
     return "NEUTRAL"
+
+
+def _direction_change_kind(previous: int, current: int) -> str:
+    old_band = _direction_band(previous)
+    new_band = _direction_band(current)
+
+    if {old_band, new_band} == {"BULL", "BEAR"}:
+        return "REVERSAL"
+    if old_band == "NEUTRAL" and new_band in {"BULL", "BEAR"}:
+        return "STRENGTHENING"
+    if old_band in {"BULL", "BEAR"} and new_band == "NEUTRAL":
+        return "WEAKENING"
+    if previous * current < 0:
+        return "REVERSAL"
+    if abs(current) > abs(previous):
+        return "STRENGTHENING"
+    return "WEAKENING"
 
 
 def _state_from_payload(payload: dict) -> str | None:
@@ -66,8 +85,15 @@ def notification_reasons(result, previous: dict) -> list[str]:
         new_band = _direction_band(result.final_direction)
         if old_band != new_band:
             reasons.append(f"DIRECTION_BAND: {old_band}→{new_band}")
-        if abs(result.final_direction) >= DIRECTION_THRESHOLD and abs(result.final_direction - previous_direction) >= MATERIAL_DIRECTION_DELTA:
-            reasons.append(f"DIRECTION_DELTA: {previous_direction:+d}→{result.final_direction:+d}")
+        if (
+            abs(result.final_direction) >= DIRECTION_THRESHOLD
+            and abs(result.final_direction - previous_direction) >= MATERIAL_DIRECTION_DELTA
+        ):
+            kind = _direction_change_kind(previous_direction, result.final_direction)
+            delta = result.final_direction - previous_direction
+            reasons.append(
+                f"DIRECTION_{kind}: {previous_direction:+d}→{result.final_direction:+d} ({delta:+d})"
+            )
 
     previous_state = _state_from_payload(previous)
     if previous_state and previous_state != result.state:
@@ -82,3 +108,40 @@ def notification_reasons(result, previous: dict) -> list[str]:
         reasons.append(f"REGIME: {previous_regime}→{result.regime}")
 
     return reasons
+
+
+_DIRECTION_RE = re.compile(
+    r"^DIRECTION_(STRENGTHENING|WEAKENING|REVERSAL): ([+-]\d+)→([+-]\d+) \(([+-]\d+)\)$"
+)
+
+
+def render_notification_reasons(reasons: list[str]) -> str:
+    lines = ["🔔 <b>Tactical Change</b>"]
+
+    for reason in reasons:
+        match = _DIRECTION_RE.match(reason)
+        if match:
+            kind, old_text, new_text, delta_text = match.groups()
+            new_value = int(new_text)
+            side = "Bullish" if new_value > 0 else "Bearish" if new_value < 0 else "Directional"
+            if kind == "STRENGTHENING":
+                lines.append(f"🚀 <b>{side} momentum strengthening</b>")
+            elif kind == "WEAKENING":
+                lines.append(f"⚠️ <b>{side} momentum weakening</b>")
+            else:
+                lines.append("🔄 <b>Directional reversal</b>")
+            lines.append(f"Direction: <b>{old_text} → {new_text} ({delta_text})</b>")
+            continue
+
+        if reason.startswith("REGIME: "):
+            lines.append(f"🧭 Regime: <b>{reason.removeprefix('REGIME: ')}</b>")
+        elif reason.startswith("GATE: "):
+            lines.append(f"🚦 Gate: <b>{reason.removeprefix('GATE: ')}</b>")
+        elif reason.startswith("STATE: "):
+            lines.append(f"⭐ State: <b>{reason.removeprefix('STATE: ')}</b>")
+        elif reason.startswith("DIRECTION_BAND: "):
+            lines.append(f"🎯 Direction band: <b>{reason.removeprefix('DIRECTION_BAND: ')}</b>")
+        else:
+            lines.append(f"• {reason}")
+
+    return "\n".join(lines)
