@@ -42,6 +42,24 @@ A default checkpoint of 250 clean 4h intervals only changes the report status fr
 
 A favorable sizing snapshot can therefore trigger human review only; it cannot alter model state or capital allocation.
 
+### Unified research gate snapshot
+
+After forecast readiness and sizing readiness are computed, the weekly workflow writes one monitor-facing artifact:
+
+`eth_reports/research-gates/research-gates.json`
+
+This is the canonical compact status surface for automation and human triage. It includes:
+
+- 3D / 7D / 30D labeled-row counts and research-readiness state;
+- effective Production Approval presence per horizon;
+- canonical 4h / clean sizing interval counts and human-review checkpoint state;
+- latest durable 4h PIT freshness, coverage, data-health status, and workflow provenance;
+- one decision status: `OBSERVE_AND_ACCUMULATE`, `FORECAST_RESEARCH_READY`, `HUMAN_SIZING_REVIEW_AVAILABLE`, `PRODUCTION_FORECAST_APPROVAL_PRESENT`, or `ENGINEERING_ATTENTION_REQUIRED`.
+
+The PIT freshness threshold is five hours, matching the Scheduled Monitor watchdog stale threshold. A stale/degraded PIT condition takes priority over research milestones so data-collection failures are repaired before research conclusions are acted on.
+
+The snapshot is strictly observational. It cannot promote a model, activate SHADOW/PRODUCTION, authorize sizing, or enable paper/live execution.
+
 ## Registered feature-group ablation
 
 Existing PIT data now supports research-only group ablation for:
