@@ -28,6 +28,7 @@ Current authoritative requirements are `docs/FORECAST_RESEARCH_PRD_v2.3.md` and 
 - Four-page static Dashboard artifact: Overview, State Explorer, Model Lab, Data Health.
 - CI, Scheduled Monitor, Backtest, and Model Validation workflows.
 - Hourly Scheduled Monitor watchdog with fail-safe stale-run detection, duplicate-run suppression, auditable report artifact, and recovery dispatch through the canonical monitor workflow.
+- Weekly PIT-backed ETH single-asset sizing research checkpoint comparing fixed, conviction-scaled, and volatility-targeted policies; 250 clean intervals trigger human review only and never automatic promotion/execution.
 - Candidate model promotion remains manual through PR/review even after statistical gates pass.
 
 ## Intentionally gated by real data

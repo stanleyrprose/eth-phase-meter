@@ -18,6 +18,30 @@ New PIT records preserve `github_event`, workflow/run identifiers, run attempt, 
 
 When no horizon is ready, the workflow records `WAIT_FOR_MORE_PIT` and exits successfully. When one or more horizons become ready, it runs the research benchmark and candidate-eligibility report automatically. It never activates SHADOW or PRODUCTION. Those remain manual reviewed state transitions.
 
+### ETH single-asset sizing research checkpoint
+
+The same weekly workflow also produces `eth_reports/sizing-research/sizing_research.json` directly from the durable PIT store. It does not use `v3_history.csv` as an authoritative evidence source.
+
+The sizing report:
+
+- canonicalizes to one 4h observation per scheduled bucket;
+- rejects missing-bucket gaps from one-period sizing comparisons;
+- aligns the current PIT rule direction only to the next canonical 4h price;
+- computes trailing volatility from prior realized intervals only;
+- compares fixed exposure, absolute-conviction sizing, and volatility-targeted conviction sizing on identical rows;
+- reports an all-PIT-clean cohort plus a `coverage >= 80` cohort;
+- reports conviction monotonicity, moving-block uncertainty, regime slices, and 5/10/20 bps transaction-cost sensitivity.
+
+A default checkpoint of 250 clean 4h intervals only changes the report status from `WAIT_FOR_MORE_PIT_SIZING_EVIDENCE` to `READY_FOR_HUMAN_SIZING_REVIEW`. It is a review cadence threshold, not a statistical or production gate. The report hard-codes all of the following to false:
+
+- automatic sizing promotion;
+- automatic SHADOW;
+- automatic PRODUCTION;
+- paper execution;
+- live execution.
+
+A favorable sizing snapshot can therefore trigger human review only; it cannot alter model state or capital allocation.
+
 ## Registered feature-group ablation
 
 Existing PIT data now supports research-only group ablation for:
