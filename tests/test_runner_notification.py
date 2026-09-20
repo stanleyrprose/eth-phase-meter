@@ -23,7 +23,6 @@ def test_send_tactical_1h_calls_telegram_and_records_compatibility_evidence(monk
         execution_reason="4h方向证据不足 (+10)",
     )
     payload_1h = {}
-    payload_4h = {}
     sent = []
 
     monkeypatch.setattr(
@@ -32,11 +31,11 @@ def test_send_tactical_1h_calls_telegram_and_records_compatibility_evidence(monk
         lambda message: sent.append(message) or {"status": "SENT", "http_status": 200},
     )
 
-    status = runner._send_tactical_1h(result, payload_1h, payload_4h)
+    status = runner._send_tactical_1h(result, payload_1h, triggers=["STATE: NEUTRAL→WEAK_BULL"])
 
     assert len(sent) == 1
     assert "ETH Tactical [1H]" in sent[0]
     assert "4H Confirmation: <b>WAIT</b>" in sent[0]
     assert status["status"] == "SENT"
+    assert "Trigger: STATE: NEUTRAL→WEAK_BULL" in sent[0]
     assert payload_1h["notification"] == status
-    assert payload_4h["execution_gate_notification"] == status

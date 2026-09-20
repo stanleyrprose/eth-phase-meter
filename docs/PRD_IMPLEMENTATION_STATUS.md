@@ -28,6 +28,7 @@ Current authoritative requirements are `docs/FORECAST_RESEARCH_PRD_v2.3.md` and 
 - Four-page static Dashboard artifact: Overview, State Explorer, Model Lab, Data Health.
 - CI, Scheduled Monitor, Backtest, and Model Validation workflows.
 - Hourly Scheduled Monitor watchdog with fail-safe stale-run detection, duplicate-run suppression, auditable report artifact, and recovery dispatch through the canonical monitor workflow.
+- Hourly 1H Tactical sampling at :15 UTC with PIT-safe hourly nominal buckets, latest-4H confirmation, durable state comparison, and change-driven Telegram delivery. The canonical 4H workflow supplies the 1H sample on 4H boundary hours to preserve the combined 1H+4H monitor contract for Meta Decision/Kronos; the dedicated tactical workflow fills the other 18 hours without running 4H forecasts.
 - Weekly PIT-backed ETH single-asset sizing research checkpoint comparing fixed, conviction-scaled, and volatility-targeted policies; 250 clean intervals trigger human review only and never automatic promotion/execution.
 - Unified weekly `research-gates.json` snapshot for forecast readiness, sizing readiness, effective Production Approval, PIT freshness/data health, and one monitor-facing next-action state.
 - Candidate model promotion remains manual through PR/review even after statistical gates pass.
