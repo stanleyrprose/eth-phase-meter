@@ -1,0 +1,82 @@
+name: ETH Scheduled Monitor Watchdog
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "45 * * * *"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: eth-scheduled-monitor-watchdog
+  cancel-in-progress: true
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Query scheduled monitor runs
+        shell: bash
+        run: |
+          gh api \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/scheduled-monitor.yml/runs?per_page=20" \
+            > watchdog-runs.json
+
+      - name: Evaluate monitor freshness
+        id: evaluate
+        run: |
+          python -m scripts.scheduled_monitor_watchdog \
+            --runs watchdog-runs.json \
+            --report watchdog-report.json \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Dispatch recovery monitor
+        id: recover
+        if: steps.evaluate.outputs.recover == 'true'
+        shell: bash
+        run: |
+          requested_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run scheduled-monitor.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref main
+          echo "requested_at=${requested_at}" >> "${GITHUB_OUTPUT}"
+          sleep 3
+          recovery_id="$(
+            gh api \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/scheduled-monitor.yml/runs?event=workflow_dispatch&per_page=5" \
+              --jq '.workflow_runs[0].id // empty'
+          )"
+          echo "run_id=${recovery_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Write watchdog summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## ETH Scheduled Monitor Watchdog" >> "${GITHUB_STEP_SUMMARY}"
+          echo >> "${GITHUB_STEP_SUMMARY}"
+          cat watchdog-report.json >> "${GITHUB_STEP_SUMMARY}"
+          if [[ "${{ steps.evaluate.outputs.recover }}" == "true" ]]; then
+            echo >> "${GITHUB_STEP_SUMMARY}"
+            echo "Recovery dispatch requested at: ${{ steps.recover.outputs.requested_at }}" >> "${GITHUB_STEP_SUMMARY}"
+            echo "Recovery run candidate ID: ${{ steps.recover.outputs.run_id }}" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload watchdog report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scheduled-monitor-watchdog-${{ github.run_id }}
+          path: watchdog-report.json
+          if-no-files-found: error
+          retention-days: 30

@@ -27,6 +27,7 @@ Current authoritative requirements are `docs/FORECAST_RESEARCH_PRD_v2.3.md` and 
 - Level 1 structural, Level 2 probability-shift, Level 3 risk/data alerts.
 - Four-page static Dashboard artifact: Overview, State Explorer, Model Lab, Data Health.
 - CI, Scheduled Monitor, Backtest, and Model Validation workflows.
+- Hourly Scheduled Monitor watchdog with fail-safe stale-run detection, duplicate-run suppression, auditable report artifact, and recovery dispatch through the canonical monitor workflow.
 - Candidate model promotion remains manual through PR/review even after statistical gates pass.
 
 ## Intentionally gated by real data
