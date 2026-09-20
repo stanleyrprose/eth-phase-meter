@@ -119,7 +119,7 @@ def build_pit_record(
         "schedule_nominal_time": _schedule_nominal_time(
             now,
             cadence_hours=1 if timeframe == "1h" else 4,
-            minute=25 if timeframe == "1h" else 15,
+            minute=15,
         ),
     }
 

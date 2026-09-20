@@ -18,7 +18,7 @@ class TestPIT(unittest.TestCase):
     def test_1h_record_uses_hourly_nominal_bucket(self, nominal):
         result = SimpleNamespace(timestamp='2026-09-20 14:25 UTC', price=2500.0, state='NEUTRAL', regime='RANGE', final_direction=0, available_bias=0, coverage=80)
         build_pit_record('1h', {'x': 1}, result)
-        self.assertEqual(nominal.call_args.kwargs, {"cadence_hours": 1, "minute": 25})
+        self.assertEqual(nominal.call_args.kwargs, {"cadence_hours": 1, "minute": 15})
 
 
 if __name__ == '__main__':

@@ -321,18 +321,55 @@ def _send_tactical_1h(result, payload_1h, triggers=None):
     return notification
 
 
+def _process_tactical_1h(result, payload_1h, primary_4h, previous_1h):
+    if primary_4h.get("rule_direction") is None:
+        result.execution_gate = "WAIT"
+        result.execution_reason = "缺少最新4H状态"
+        decision = {"status": "SKIPPED", "reason": "NO_4H_STATE", "triggers": []}
+    else:
+        apply_4h_confirmation(result, int(primary_4h["rule_direction"]))
+        if not previous_1h:
+            decision = {"status": "SKIPPED", "reason": "BASELINE_ESTABLISHED", "triggers": []}
+        else:
+            from .tactical_alerts import notification_reasons
+
+            triggers = notification_reasons(result, previous_1h)
+            if triggers:
+                notification = _send_tactical_1h(result, payload_1h, triggers=triggers)
+                decision = {**notification, "reason": "SIGNIFICANT_CHANGE", "triggers": triggers}
+            else:
+                decision = {"status": "SKIPPED", "reason": "NO_SIGNIFICANT_CHANGE", "triggers": []}
+
+    payload_1h["execution_gate"] = result.execution_gate
+    payload_1h["execution_reason"] = result.execution_reason
+    payload_1h["available_bias"] = result.available_bias
+    payload_1h["tactical_state"] = result.state
+    payload_1h["rule_regime"] = result.regime
+    payload_1h["notification_decision"] = decision
+    return decision
+
+
 def main():
     history = load_pit_records(os.getenv("DATABASE_URL"))
+    previous_1h = load_latest_record("monitor_state_1h") or {}
     r4, p4 = run_one("4h", history)
+    r1, p1 = run_one("1h", history)
+    tactical_decision = _process_tactical_1h(r1, p1, p4, previous_1h)
 
-    summary = {"4h": p4}
+    persist_json_record("monitor_state_1h", p1)
+    (OUTPUT / "v3_snapshot_1h.json").write_text(
+        json.dumps(p1, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+
+    summary = {"4h": p4, "1h": p1}
     (OUTPUT / "latest_monitor.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     write_dashboard(OUTPUT, p4)
 
     manifest_path = write_run_manifest(
-        OUTPUT, {"4h": r4},
+        OUTPUT, {"4h": r4, "1h": r1},
         extra={
-            "data_health": {"4h": p4["data_health"]["status"]},
+            "data_health": {"4h": p4["data_health"]["status"], "1h": p1["data_health"]["status"]},
             "forecast_status": {h: v["status"] for h, v in p4["forecasts"].items()},
             "model_reliability": p4["model_reliability"],
             "model_health": p4["model_health"]["status"],
@@ -343,8 +380,14 @@ def main():
     manifest["external_persisted"] = persist_json_record("run_manifest", manifest)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    summary["notification"] = {"forecast_summary": p4.get("notification")}
+    summary["notification"] = {
+        "forecast_summary": p4.get("notification"),
+        "tactical_1h": tactical_decision,
+    }
     (OUTPUT / "latest_monitor.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    if tactical_decision.get("reason") == "SIGNIFICANT_CHANGE" and tactical_decision.get("status") != "SENT":
+        raise SystemExit(1)
     return summary
 
 
