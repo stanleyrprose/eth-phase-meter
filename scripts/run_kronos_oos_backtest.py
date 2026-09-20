@@ -183,6 +183,59 @@ def _mean(values: list[float]) -> float | None:
     return float(np.mean(values)) if values else None
 
 
+def _summary_metrics(rows: list[dict]) -> dict:
+    if not rows:
+        return {"n": 0}
+    kronos_hits = [
+        bool(row["kronos_direction_hit"])
+        for row in rows
+        if row["kronos_direction_hit"] is not None
+    ]
+    momentum_hits = [
+        bool(row["momentum_direction_hit"])
+        for row in rows
+        if row["momentum_direction_hit"] is not None
+    ]
+    pred_returns = pd.Series([row["kronos_return_pct"] for row in rows])
+    actual_returns = pd.Series([row["actual_return_pct"] for row in rows])
+    rank_ic = float(pred_returns.rank().corr(actual_returns.rank())) if len(rows) >= 3 else None
+    kronos_mae = _mean([row["kronos_abs_price_error_pct"] for row in rows])
+    persistence_mae = _mean([row["persistence_abs_price_error_pct"] for row in rows])
+    momentum_mae = _mean([row["momentum_abs_price_error_pct"] for row in rows])
+    return {
+        "n": len(rows),
+        "kronos_direction_hit_rate": float(np.mean(kronos_hits)) if kronos_hits else None,
+        "momentum_direction_hit_rate": float(np.mean(momentum_hits)) if momentum_hits else None,
+        "kronos_direction_binomial_p_two_sided": _binomial_p_two_sided(
+            sum(kronos_hits), len(kronos_hits)
+        ),
+        "rank_ic_spearman": rank_ic,
+        "kronos_terminal_price_mae_pct": kronos_mae,
+        "persistence_terminal_price_mae_pct": persistence_mae,
+        "momentum_terminal_price_mae_pct": momentum_mae,
+        "kronos_mae_lift_vs_persistence_pct": (
+            persistence_mae - kronos_mae
+            if persistence_mae is not None and kronos_mae is not None
+            else None
+        ),
+    }
+
+
+def _subperiod_metrics(rows: list[dict]) -> dict:
+    frame = pd.DataFrame(rows)
+    frame["source_time"] = pd.to_datetime(frame["source_timestamp"], utc=True)
+    periods = {
+        "2024H2": (pd.Timestamp("2024-07-01T00:00:00Z"), pd.Timestamp("2025-01-01T00:00:00Z")),
+        "2025": (pd.Timestamp("2025-01-01T00:00:00Z"), pd.Timestamp("2026-01-01T00:00:00Z")),
+        "2026YTD": (pd.Timestamp("2026-01-01T00:00:00Z"), pd.Timestamp("2027-01-01T00:00:00Z")),
+    }
+    result = {}
+    for label, (start, end) in periods.items():
+        subset = frame[(frame["source_time"] >= start) & (frame["source_time"] < end)]
+        result[label] = _summary_metrics(subset.drop(columns=["source_time"]).to_dict("records"))
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     kronos_repo = Path(args.kronos_repo).expanduser().resolve()
@@ -256,14 +309,8 @@ def main(argv: list[str] | None = None) -> int:
         if (sequence + 1) % 10 == 0 or sequence + 1 == len(points):
             print(f"OOS progress {sequence + 1}/{len(points)}", flush=True)
 
-    kronos_hits = [bool(row["kronos_direction_hit"]) for row in rows if row["kronos_direction_hit"] is not None]
-    momentum_hits = [bool(row["momentum_direction_hit"]) for row in rows if row["momentum_direction_hit"] is not None]
-    pred_returns = pd.Series([row["kronos_return_pct"] for row in rows])
-    actual_returns = pd.Series([row["actual_return_pct"] for row in rows])
-    rank_ic = float(pred_returns.rank().corr(actual_returns.rank())) if len(rows) >= 3 else None
-    kronos_mae = _mean([row["kronos_abs_price_error_pct"] for row in rows])
-    persistence_mae = _mean([row["persistence_abs_price_error_pct"] for row in rows])
-    momentum_mae = _mean([row["momentum_abs_price_error_pct"] for row in rows])
+    overall_metrics = _summary_metrics(rows)
+    subperiods = _subperiod_metrics(rows)
 
     report = {
         "schema_version": "kronos-oos-benchmark-v1",
@@ -289,23 +336,8 @@ def main(argv: list[str] | None = None) -> int:
             "selected_points": len(rows),
             "overlapping_targets": False,
         },
-        "metrics": {
-            "n": len(rows),
-            "kronos_direction_hit_rate": float(np.mean(kronos_hits)) if kronos_hits else None,
-            "momentum_direction_hit_rate": float(np.mean(momentum_hits)) if momentum_hits else None,
-            "kronos_direction_binomial_p_two_sided": _binomial_p_two_sided(
-                sum(kronos_hits), len(kronos_hits)
-            ),
-            "rank_ic_spearman": rank_ic,
-            "kronos_terminal_price_mae_pct": kronos_mae,
-            "persistence_terminal_price_mae_pct": persistence_mae,
-            "momentum_terminal_price_mae_pct": momentum_mae,
-            "kronos_mae_lift_vs_persistence_pct": (
-                persistence_mae - kronos_mae
-                if persistence_mae is not None and kronos_mae is not None
-                else None
-            ),
-        },
+        "metrics": overall_metrics,
+        "subperiods": subperiods,
         "rows": rows,
         "interpretation_guardrail": (
             "Sampling agreement is not a calibrated probability. "
