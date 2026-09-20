@@ -9,6 +9,30 @@ def telegram_text(r):
     return '\n'.join(lines)
 
 
+def tactical_summary(r) -> str:
+    active = [f for f in r.factors if f.active]
+    pos = sorted((f for f in active if f.contribution > 0), key=lambda x: x.contribution, reverse=True)[:2]
+    neg = sorted((f for f in active if f.contribution < 0), key=lambda x: x.contribution)[:2]
+    fmt = lambda xs: ", ".join(f"{x.name} {x.contribution:+.1f}" for x in xs) if xs else "无"
+    lines = [
+        f"📈 <b>ETH Tactical [1H]</b> | {r.timestamp}",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"💰 Price: <b>${r.price:,.2f}</b>",
+        f"🎯 Direction: <b>{r.final_direction:+d}</b>/100 | Bias: <b>{r.available_bias:+d}</b>/100",
+        f"📡 Coverage: <b>{r.coverage:.0f}%</b> | Confidence: <b>{r.confidence}</b>",
+        f"🧭 Regime: <b>{r.regime}</b>",
+        f"👥 Crowding: <b>{r.crowding}</b>/100 | 🌪 Volatility: <b>{r.volatility}</b>/100",
+        f"⭐ State: <b>{r.state}</b>",
+        f"⬆️ 主要偏多: {fmt(pos)}",
+        f"⬇️ 主要偏空: {fmt(neg)}",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"🚦 4H Confirmation: <b>{r.execution_gate}</b>",
+        f"📝 {r.execution_reason}",
+        "注：1H用于战术确认；3D/7D/30D预测仍以4H为主。",
+    ]
+    return "\n".join(lines)
+
+
 def prd_summary(payload: dict) -> str:
     state=(payload.get('market_state') or {}).get('dimensions') or {}; forecasts=payload.get('forecasts') or {}; health=payload.get('data_health') or {}; regime=payload.get('regime') or {}
     lines=['📊 <b>ETH Market State [4H]</b>',f"💰 Price: <b>${payload.get('price',0):,.2f}</b>",'━━━━━━━━━━━━━━━━━━━━',f"🧭 Regime: <b>{regime.get('regime','Unavailable')}</b>"]
