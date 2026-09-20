@@ -114,9 +114,12 @@ def test_outcome_resolution_and_conflict_metrics(tmp_path):
     assert one_hour["momentum_direction_hit_rate"] == 0.0
     assert four_hour["kronos_direction_hit_rate"] == 1.0
     assert four_hour["phase_direction_hit_rate"] == 0.0
-    assert four_hour["conflict_n"] == 1
+    assert four_hour["raw_matured_n"] == 1
+    assert four_hour["effective_nonoverlap_n"] == 1
+    assert four_hour["effective_conflict_n"] == 1
     assert four_hour["conflict_kronos_hit_rate"] == 1.0
     assert four_hour["conflict_phase_hit_rate"] == 0.0
+    assert report["promotion_assessment"]["eligible"] is False
 
 
 def test_evaluator_reports_no_matured_samples(tmp_path):
@@ -125,3 +128,78 @@ def test_evaluator_reports_no_matured_samples(tmp_path):
     report = evaluate_kronos_pit(load_kronos_pit(path))
     assert report["horizons"]["1h"]["available"] is False
     assert report["horizons"]["4h"]["reason"] == "NO_MATURED_PIT_OUTCOMES"
+
+
+def test_overlapping_72h_windows_do_not_inflate_effective_sample_size():
+    def record(source, end, actual_return):
+        return {
+            "horizons": {
+                "4h": {
+                    "source_last_timestamp": source,
+                    "forecast_end_timestamp": end,
+                    "predicted_terminal_return_pct": 2.0,
+                    "direction_score": 30.0,
+                    "phase_direction": 20.0,
+                    "outcome": {
+                        "actual_return_pct": actual_return,
+                        "kronos_direction_hit": actual_return > 0,
+                        "momentum_direction_hit": actual_return > 0,
+                        "phase_direction_hit": actual_return > 0,
+                        "kronos_abs_price_error_pct": 1.0,
+                        "persistence_abs_price_error_pct": 2.0,
+                        "momentum_abs_price_error_pct": 2.5,
+                    },
+                }
+            }
+        }
+
+    records = [
+        record("2026-09-01T00:00:00Z", "2026-09-04T00:00:00Z", 3.0),
+        record("2026-09-01T04:00:00Z", "2026-09-04T04:00:00Z", -1.0),
+        record("2026-09-04T00:00:00Z", "2026-09-07T00:00:00Z", 2.0),
+    ]
+    report = evaluate_kronos_pit(records)
+    four_hour = report["horizons"]["4h"]
+    assert four_hour["raw_matured_n"] == 3
+    assert four_hour["effective_nonoverlap_n"] == 2
+    assert four_hour["overlap_discarded_n"] == 1
+    assert four_hour["kronos_direction_hit_rate"] == 1.0
+
+
+def test_promotion_gate_can_only_become_eligible_on_independent_strong_evidence():
+    records = []
+    start = pd.Timestamp("2026-01-01T00:00:00Z")
+    for index in range(100):
+        source = start + pd.Timedelta(days=3 * index)
+        end = source + pd.Timedelta(days=3)
+        predicted = 1.0 + index / 100.0
+        actual = predicted + 0.5
+        records.append(
+            {
+                "horizons": {
+                    "4h": {
+                        "source_last_timestamp": source.isoformat(),
+                        "forecast_end_timestamp": end.isoformat(),
+                        "predicted_terminal_return_pct": predicted,
+                        "direction_score": 30.0,
+                        "phase_direction": -20.0 if index < 30 else 20.0,
+                        "outcome": {
+                            "actual_return_pct": actual,
+                            "kronos_direction_hit": True,
+                            "momentum_direction_hit": False,
+                            "phase_direction_hit": index >= 30,
+                            "kronos_abs_price_error_pct": 1.0,
+                            "persistence_abs_price_error_pct": 2.0,
+                            "momentum_abs_price_error_pct": 2.5,
+                        },
+                    }
+                }
+            }
+        )
+    report = evaluate_kronos_pit(records)
+    assessment = report["promotion_assessment"]
+    assert report["horizons"]["4h"]["effective_nonoverlap_n"] == 100
+    assert report["horizons"]["4h"]["effective_conflict_n"] == 30
+    assert assessment["eligible"] is True
+    assert assessment["requires_human_approval"] is True
+    assert assessment["automatic_production_change_allowed"] is False
