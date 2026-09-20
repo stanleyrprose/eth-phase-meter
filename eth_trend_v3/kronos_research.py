@@ -11,7 +11,12 @@ import numpy as np
 import pandas as pd
 
 KRONOS_PIT_SCHEMA_VERSION = "kronos-pit-v1"
-KRONOS_RESEARCH_REPORT_VERSION = "kronos-research-report-v1"
+KRONOS_RESEARCH_REPORT_VERSION = "kronos-research-report-v2-nonoverlap"
+KRONOS_PROMOTION_POLICY_VERSION = "kronos-promotion-policy-v1"
+PRIMARY_PROMOTION_TIMEFRAME = "4h"
+PROMOTION_MIN_EFFECTIVE_N = 100
+PROMOTION_MIN_CONFLICT_N = 30
+PROMOTION_MIN_DIRECTION_HIT_RATE = 0.55
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -273,6 +278,59 @@ def _exact_two_sided_binomial_p(hits: int, n: int) -> float | None:
     return min(1.0, total)
 
 
+def _canonical_nonoverlap_rows(rows: list[tuple[dict, dict, dict]]) -> list[tuple[dict, dict, dict]]:
+    ordered = sorted(
+        rows,
+        key=lambda item: _parse_time(item[1].get("source_last_timestamp"))
+        or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    selected: list[tuple[dict, dict, dict]] = []
+    last_end: datetime | None = None
+    for row in ordered:
+        horizon = row[1]
+        source = _parse_time(horizon.get("source_last_timestamp"))
+        end = _parse_time(horizon.get("forecast_end_timestamp"))
+        if source is None or end is None or end <= source:
+            continue
+        if last_end is not None and source < last_end:
+            continue
+        selected.append(row)
+        last_end = end
+    return selected
+
+
+def _promotion_assessment(horizon_report: dict[str, Any]) -> dict[str, Any]:
+    hit_rate = horizon_report.get("kronos_direction_hit_rate")
+    p_value = horizon_report.get("kronos_direction_binomial_p_two_sided")
+    rank_ic = horizon_report.get("rank_ic_spearman")
+    mae_lift = horizon_report.get("kronos_mae_lift_vs_persistence_pct")
+    effective_n = int(horizon_report.get("effective_nonoverlap_n") or 0)
+    conflict_n = int(horizon_report.get("effective_conflict_n") or 0)
+    gates = {
+        "effective_n": effective_n >= PROMOTION_MIN_EFFECTIVE_N,
+        "conflict_n": conflict_n >= PROMOTION_MIN_CONFLICT_N,
+        "direction_hit_rate": hit_rate is not None and hit_rate >= PROMOTION_MIN_DIRECTION_HIT_RATE,
+        "direction_binomial_p": p_value is not None and p_value < 0.05,
+        "rank_ic_positive": rank_ic is not None and rank_ic > 0.0,
+        "mae_beats_persistence": mae_lift is not None and mae_lift > 0.0,
+    }
+    return {
+        "policy_version": KRONOS_PROMOTION_POLICY_VERSION,
+        "eligible": all(gates.values()),
+        "gates": gates,
+        "thresholds": {
+            "minimum_effective_nonoverlap_n": PROMOTION_MIN_EFFECTIVE_N,
+            "minimum_effective_conflict_n": PROMOTION_MIN_CONFLICT_N,
+            "minimum_direction_hit_rate": PROMOTION_MIN_DIRECTION_HIT_RATE,
+            "maximum_direction_binomial_p_two_sided": 0.05,
+            "rank_ic_must_be_positive": True,
+            "mae_lift_vs_persistence_must_be_positive": True,
+        },
+        "automatic_production_change_allowed": False,
+        "requires_human_approval": True,
+    }
+
+
 def evaluate_kronos_pit(records: list[dict[str, Any]]) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema_version": KRONOS_RESEARCH_REPORT_VERSION,
@@ -291,28 +349,59 @@ def evaluate_kronos_pit(records: list[dict[str, Any]]) -> dict[str, Any]:
         if not rows:
             report["horizons"][timeframe] = {
                 "available": False,
-                "matured_n": 0,
+                "raw_matured_n": 0,
+                "effective_nonoverlap_n": 0,
+                "overlap_discarded_n": 0,
                 "reason": "NO_MATURED_PIT_OUTCOMES",
             }
             continue
 
-        pred_returns = [float(h["predicted_terminal_return_pct"]) for _, h, _ in rows]
-        actual_returns = [float(o["actual_return_pct"]) for _, _, o in rows]
+        effective_rows = _canonical_nonoverlap_rows(rows)
+        pred_returns = [float(h["predicted_terminal_return_pct"]) for _, h, _ in effective_rows]
+        actual_returns = [float(o["actual_return_pct"]) for _, _, o in effective_rows]
         rank_ic = None
-        if len(rows) >= 3 and len(set(pred_returns)) > 1 and len(set(actual_returns)) > 1:
+        if (
+            len(effective_rows) >= 3
+            and len(set(pred_returns)) > 1
+            and len(set(actual_returns)) > 1
+        ):
             rank_ic = float(
                 pd.Series(pred_returns).rank().corr(pd.Series(actual_returns).rank())
             )
 
-        kronos_hits = [bool(o["kronos_direction_hit"]) for _, _, o in rows if o.get("kronos_direction_hit") is not None]
-        momentum_hits = [bool(o["momentum_direction_hit"]) for _, _, o in rows if o.get("momentum_direction_hit") is not None]
-        phase_hits = [bool(o["phase_direction_hit"]) for _, _, o in rows if o.get("phase_direction_hit") is not None]
-        kronos_errors = [float(o["kronos_abs_price_error_pct"]) for _, _, o in rows if o.get("kronos_abs_price_error_pct") is not None]
-        persistence_errors = [float(o["persistence_abs_price_error_pct"]) for _, _, o in rows if o.get("persistence_abs_price_error_pct") is not None]
-        momentum_errors = [float(o["momentum_abs_price_error_pct"]) for _, _, o in rows if o.get("momentum_abs_price_error_pct") is not None]
+        kronos_hits = [
+            bool(o["kronos_direction_hit"])
+            for _, _, o in effective_rows
+            if o.get("kronos_direction_hit") is not None
+        ]
+        momentum_hits = [
+            bool(o["momentum_direction_hit"])
+            for _, _, o in effective_rows
+            if o.get("momentum_direction_hit") is not None
+        ]
+        phase_hits = [
+            bool(o["phase_direction_hit"])
+            for _, _, o in effective_rows
+            if o.get("phase_direction_hit") is not None
+        ]
+        kronos_errors = [
+            float(o["kronos_abs_price_error_pct"])
+            for _, _, o in effective_rows
+            if o.get("kronos_abs_price_error_pct") is not None
+        ]
+        persistence_errors = [
+            float(o["persistence_abs_price_error_pct"])
+            for _, _, o in effective_rows
+            if o.get("persistence_abs_price_error_pct") is not None
+        ]
+        momentum_errors = [
+            float(o["momentum_abs_price_error_pct"])
+            for _, _, o in effective_rows
+            if o.get("momentum_abs_price_error_pct") is not None
+        ]
 
         conflicts = []
-        for record, horizon, outcome in rows:
+        for record, horizon, outcome in effective_rows:
             if (
                 _sign(horizon.get("direction_score"), neutral_band=10.0)
                 * _sign(horizon.get("phase_direction"), neutral_band=10.0)
@@ -330,7 +419,9 @@ def evaluate_kronos_pit(records: list[dict[str, Any]]) -> dict[str, Any]:
         hit_n = len(kronos_hits)
         report["horizons"][timeframe] = {
             "available": True,
-            "matured_n": len(rows),
+            "raw_matured_n": len(rows),
+            "effective_nonoverlap_n": len(effective_rows),
+            "overlap_discarded_n": len(rows) - len(effective_rows),
             "kronos_direction_hit_rate": _hit_rate(kronos_hits),
             "momentum_direction_hit_rate": _hit_rate(momentum_hits),
             "phase_direction_hit_rate": _hit_rate(phase_hits),
@@ -344,14 +435,16 @@ def evaluate_kronos_pit(records: list[dict[str, Any]]) -> dict[str, Any]:
                 if persistence_errors and kronos_errors
                 else None
             ),
-            "conflict_n": len(conflicts),
+            "effective_conflict_n": len(conflicts),
             "conflict_kronos_hit_rate": _hit_rate(conflict_kronos_hits),
             "conflict_phase_hit_rate": _hit_rate(conflict_phase_hits),
             "research_readiness": {
-                "minimum_matured_n": 100,
-                "minimum_conflict_n": 30,
-                "matured_sample_ready": len(rows) >= 100,
-                "conflict_sample_ready": len(conflicts) >= 30,
+                "minimum_effective_nonoverlap_n": PROMOTION_MIN_EFFECTIVE_N,
+                "minimum_effective_conflict_n": PROMOTION_MIN_CONFLICT_N,
+                "effective_sample_ready": len(effective_rows) >= PROMOTION_MIN_EFFECTIVE_N,
+                "conflict_sample_ready": len(conflicts) >= PROMOTION_MIN_CONFLICT_N,
             },
         }
+    primary = report["horizons"].get(PRIMARY_PROMOTION_TIMEFRAME) or {}
+    report["promotion_assessment"] = _promotion_assessment(primary)
     return report
