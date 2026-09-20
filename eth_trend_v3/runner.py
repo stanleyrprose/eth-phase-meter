@@ -7,7 +7,7 @@ import eth_phase_meter as core
 from .collectors import collect
 from .features import all_factors
 from .engine import evaluate
-from .notify import telegram_text, prd_summary
+from .notify import telegram_text, prd_summary, tactical_summary
 from .storage import update_history
 from .pit import build_pit_record, write_pit_snapshot, write_run_manifest
 from .persistence import persist_json_record, persistence_mode, load_latest_record
@@ -328,15 +328,19 @@ def main():
     manifest["external_persisted"] = persist_json_record("run_manifest", manifest)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    gate = f"🚦 Execution Gate: <b>{r1.execution_gate}</b> | {r1.execution_reason}"
-    print(gate)
-    gate_notification = core.send_tg_message(gate)
-    p4["execution_gate_notification"] = gate_notification
+    tactical_text = tactical_summary(r1)
+    print(tactical_text)
+    tactical_notification = core.send_tg_message(tactical_text)
+    p1["notification"] = tactical_notification
+    persist_json_record("monitor_state_1h", p1)
+    (OUTPUT / "v3_snapshot_1h.json").write_text(json.dumps(p1, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    p4["execution_gate_notification"] = tactical_notification
     persist_json_record("monitor_state_4h", p4)
     (OUTPUT / "v3_snapshot_4h.json").write_text(json.dumps(p4, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     summary["notification"] = {
         "forecast_summary": p4.get("notification"),
-        "execution_gate": gate_notification,
+        "execution_gate": tactical_notification,
+        "tactical_1h": tactical_notification,
     }
     (OUTPUT / "latest_monitor.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return summary
