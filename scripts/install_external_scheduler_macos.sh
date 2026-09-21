@@ -7,6 +7,7 @@ PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
 GH_BIN="${GH_BIN:-$(command -v gh)}"
 PLIST_PATH="$HOME/Library/LaunchAgents/${LABEL}.plist"
 LOG_DIR="$HOME/.eth-phase-scheduler"
+RUNTIME_DIR="${LOG_DIR}/runtime"
 DOMAIN="gui/$(id -u)"
 
 if [[ -z "${PYTHON_BIN}" || ! -x "${PYTHON_BIN}" ]]; then
@@ -18,29 +19,30 @@ if [[ -z "${GH_BIN}" || ! -x "${GH_BIN}" ]]; then
   exit 1
 fi
 
-gh auth status >/dev/null
+"${GH_BIN}" auth status >/dev/null
 
-mkdir -p "$(dirname "${PLIST_PATH}")" "${LOG_DIR}"
+mkdir -p "$(dirname "${PLIST_PATH}")" "${LOG_DIR}" "${RUNTIME_DIR}"
+install -m 0644 "${REPO_ROOT}/scripts/external_scheduler_dispatch.py" "${RUNTIME_DIR}/external_scheduler_dispatch.py"
 
-"${PYTHON_BIN}" - "${PLIST_PATH}" "${LABEL}" "${REPO_ROOT}" "${PYTHON_BIN}" "${GH_BIN}" "${LOG_DIR}" <<'PY'
+"${PYTHON_BIN}" - "${PLIST_PATH}" "${LABEL}" "${RUNTIME_DIR}" "${PYTHON_BIN}" "${GH_BIN}" "${LOG_DIR}" <<'PY'
 from __future__ import annotations
 
 import plistlib
 import sys
 from pathlib import Path
 
-plist_path, label, repo_root, python_bin, gh_bin, log_dir = sys.argv[1:]
+plist_path, label, runtime_dir, python_bin, gh_bin, log_dir = sys.argv[1:]
 payload = {
     "Label": label,
     "ProgramArguments": [
         python_bin,
-        str(Path(repo_root) / "scripts" / "external_scheduler_dispatch.py"),
+        str(Path(runtime_dir) / "external_scheduler_dispatch.py"),
         "--repo",
         "stanleyrprose/eth-phase-meter",
         "--gh",
         gh_bin,
     ],
-    "WorkingDirectory": repo_root,
+    "WorkingDirectory": runtime_dir,
     "EnvironmentVariables": {
         "HOME": str(Path.home()),
         "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -62,4 +64,5 @@ PY
 /bin/launchctl print "${DOMAIN}/${LABEL}" | sed -n '1,80p'
 
 echo "Installed ${LABEL}"
+echo "Runtime: ${RUNTIME_DIR}"
 echo "Logs: ${LOG_DIR}"
