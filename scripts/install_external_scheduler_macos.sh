@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LABEL="${ETH_SCHEDULER_LABEL:-com.stanley.eth-phase-scheduler}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+GH_BIN="${GH_BIN:-$(command -v gh)}"
+PLIST_PATH="$HOME/Library/LaunchAgents/${LABEL}.plist"
+LOG_DIR="$HOME/.eth-phase-scheduler"
+DOMAIN="gui/$(id -u)"
+
+if [[ -z "${PYTHON_BIN}" || ! -x "${PYTHON_BIN}" ]]; then
+  echo "ERROR: python3 not found or not executable" >&2
+  exit 1
+fi
+if [[ -z "${GH_BIN}" || ! -x "${GH_BIN}" ]]; then
+  echo "ERROR: gh not found or not executable" >&2
+  exit 1
+fi
+
+gh auth status >/dev/null
+
+mkdir -p "$(dirname "${PLIST_PATH}")" "${LOG_DIR}"
+
+"${PYTHON_BIN}" - "${PLIST_PATH}" "${LABEL}" "${REPO_ROOT}" "${PYTHON_BIN}" "${GH_BIN}" "${LOG_DIR}" <<'PY'
+from __future__ import annotations
+
+import plistlib
+import sys
+from pathlib import Path
+
+plist_path, label, repo_root, python_bin, gh_bin, log_dir = sys.argv[1:]
+payload = {
+    "Label": label,
+    "ProgramArguments": [
+        python_bin,
+        str(Path(repo_root) / "scripts" / "external_scheduler_dispatch.py"),
+        "--repo",
+        "stanleyrprose/eth-phase-meter",
+        "--gh",
+        gh_bin,
+    ],
+    "WorkingDirectory": repo_root,
+    "EnvironmentVariables": {
+        "HOME": str(Path.home()),
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    },
+    "StartCalendarInterval": {"Minute": 20},
+    "RunAtLoad": True,
+    "ProcessType": "Background",
+    "StandardOutPath": str(Path(log_dir) / "scheduler.log"),
+    "StandardErrorPath": str(Path(log_dir) / "scheduler.err.log"),
+}
+with open(plist_path, "wb") as handle:
+    plistlib.dump(payload, handle, sort_keys=False)
+PY
+
+/usr/bin/plutil -lint "${PLIST_PATH}"
+/bin/launchctl bootout "${DOMAIN}" "${PLIST_PATH}" 2>/dev/null || true
+/bin/launchctl bootstrap "${DOMAIN}" "${PLIST_PATH}"
+/bin/launchctl kickstart -k "${DOMAIN}/${LABEL}"
+/bin/launchctl print "${DOMAIN}/${LABEL}" | sed -n '1,80p'
+
+echo "Installed ${LABEL}"
+echo "Logs: ${LOG_DIR}"
