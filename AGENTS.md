@@ -323,19 +323,24 @@ Important workflows include:
 - `baseline-benchmark.yml`
 - HMM bootstrap/ablation workflows
 
-The 4H strategic production monitor runs every four hours via:
+The production compute workflows are dispatch-only. GitHub scheduled cron was observed to be delayed or skipped by hours and is not treated as the primary sampling clock.
+
+Primary scheduler:
 
 ```text
-15 */4 * * *
+Mac mini launchd at minute 20 every hour
+→ scripts/external_scheduler_dispatch.py
+→ missing current 4H bucket: dispatch scheduled-monitor.yml
+→ otherwise, on non-boundary hours, missing current 1H bucket: dispatch tactical-1h.yml
 ```
 
-The 1H tactical layer is sampled once per hour at minute 15. On the six 4H boundary hours (00/04/08/12/16/20 UTC), the strategic workflow computes both 4H and 1H so the combined monitor artifact remains compatible with Meta Decision/Kronos. On the other 18 hours, the dedicated tactical workflow runs via:
+The external scheduler checks GitHub run state before dispatching. Active or successful current-bucket runs count as covered; failed runs can be retried. A missing 4H Strategic bucket takes priority because that run also produces the current 1H sample.
 
-```text
-15 1-3,5-7,9-11,13-15,17-19,21-23 * * *
-```
+GitHub Actions watchdogs remain best-effort fallback:
+- scheduled-monitor-watchdog.yml checks 4H freshness hourly at :45 and recovers after 4.25h staleness;
+- tactical-1h-watchdog.yml checks non-boundary 1H hours at :45 and recovers after 1.25h staleness.
 
-Every 1H observation is persisted, but Telegram is sent only for significant state changes (direction-band/state/regime/gate transitions or material direction moves). The latest persisted 4H state is used for confirmation. Both workflows use repository Secrets for credentials/data providers and upload run artifacts.
+On the six 4H boundary hours (00/04/08/12/16/20 UTC), the strategic workflow computes both 4H and 1H so the combined monitor artifact remains compatible with Meta Decision/Kronos. Every 1H observation is persisted, but Telegram is sent only for significant state changes (direction-band/state/regime/gate transitions or material direction moves). The latest persisted 4H state is used for confirmation.
 
 Never commit secret values into workflow YAML, examples, tests, docs, logs, or reports.
 
