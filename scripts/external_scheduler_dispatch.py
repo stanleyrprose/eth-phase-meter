@@ -90,7 +90,7 @@ def decide(*, now: datetime, strategic_runs: Mapping[str, Any], tactical_runs: M
 
 def _gh_json(gh: str, repo: str, workflow: str) -> dict[str, Any]:
     completed = subprocess.run(
-        [gh, "api", f"/repos/{repo}/actions/workflows/{workflow}/runs?per_page=20"],
+        [gh, "api", f"/repos/{repo}/actions/workflows/{workflow}/runs?branch=main&per_page=20"],
         check=True, text=True, capture_output=True,
     )
     return json.loads(completed.stdout)

@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           gh api \
-            "/repos/${GITHUB_REPOSITORY}/actions/workflows/tactical-1h.yml/runs?per_page=20" \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/tactical-1h.yml/runs?branch=main&per_page=20" \
             > tactical-watchdog-runs.json
 
       - name: Evaluate tactical freshness

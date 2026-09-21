@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           gh api \
-            "/repos/${GITHUB_REPOSITORY}/actions/workflows/scheduled-monitor.yml/runs?per_page=20" \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/scheduled-monitor.yml/runs?branch=main&per_page=20" \
             > watchdog-runs.json
 
       - name: Evaluate monitor freshness
