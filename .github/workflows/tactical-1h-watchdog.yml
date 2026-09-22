@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
 
     steps:
       - uses: actions/checkout@v5
@@ -41,8 +43,17 @@ jobs:
             --report tactical-watchdog-report.json \
             --github-output "${GITHUB_OUTPUT}" \
             --expected-cadence-hours 1 \
-            --stale-after-hours 1.25
+            --stale-after-hours 0.75
 
+      - name: Send scheduler health alert
+        if: steps.evaluate.outputs.recover == 'true'
+        continue-on-error: true
+        run: >-
+          python -m scripts.send_system_health
+          --component "1H Tactical scheduler"
+          --status DEGRADED
+          --reason "${{ steps.evaluate.outputs.reason }}"
+          --impact "1H sampling is stale; watchdog recovery dispatch requested."
       - name: Dispatch recovery tactical run
         id: recover
         if: steps.evaluate.outputs.recover == 'true'

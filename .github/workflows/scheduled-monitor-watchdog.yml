@@ -3,7 +3,7 @@ name: ETH Scheduled Monitor Watchdog
 on:
   workflow_dispatch:
   schedule:
-    - cron: "45 * * * *"
+    - cron: "45 1,5,9,13,17,21 * * *"
 
 permissions:
   contents: read
@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
 
     steps:
       - uses: actions/checkout@v5
@@ -43,6 +45,15 @@ jobs:
             --expected-cadence-hours 4 \
             --stale-after-hours 4.25
 
+      - name: Send scheduler health alert
+        if: steps.evaluate.outputs.recover == 'true'
+        continue-on-error: true
+        run: >-
+          python -m scripts.send_system_health
+          --component "4H Strategic scheduler"
+          --status DEGRADED
+          --reason "${{ steps.evaluate.outputs.reason }}"
+          --impact "4H sampling is stale; watchdog recovery dispatch requested."
       - name: Dispatch recovery monitor
         id: recover
         if: steps.evaluate.outputs.recover == 'true'

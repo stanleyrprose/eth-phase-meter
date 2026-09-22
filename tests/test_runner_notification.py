@@ -50,3 +50,42 @@ def test_send_tactical_1h_calls_telegram_with_readable_change_summary(monkeypatc
     assert "DIRECTION_WEAKENING:" not in sent[0]
     assert status["status"] == "SENT"
     assert payload_1h["notification"] == status
+
+
+def test_tactical_change_can_notify_when_4h_state_is_missing(monkeypatch):
+    result = SimpleNamespace(
+        timestamp="2026-09-22 02:15 UTC",
+        price=2748.2,
+        final_direction=40,
+        available_bias=40,
+        coverage=98.0,
+        confidence="High",
+        regime="TREND_UP",
+        crowding=30,
+        volatility=25,
+        state="WEAK_BULL",
+        factors=[],
+        execution_gate="PASS",
+        execution_reason="",
+    )
+    previous = {
+        "rule_direction": 20,
+        "coverage": 98,
+        "tactical_state": "WEAK_BULL",
+        "execution_gate": "PASS",
+        "rule_regime": "TRANSITION",
+    }
+    sent = []
+
+    monkeypatch.setattr(
+        runner,
+        "_send_tactical_1h",
+        lambda result, payload, triggers=None: sent.append(list(triggers or [])) or {"status": "SENT", "http_status": 200},
+    )
+
+    decision = runner._process_tactical_1h(result, {}, {}, previous)
+
+    assert result.execution_gate == "WAIT"
+    assert decision["reason"] == "SIGNIFICANT_CHANGE"
+    assert any(item.startswith("DIRECTION_STRENGTHENING:") for item in sent[0])
+    assert "GATE: PASS→WAIT" in sent[0]
