@@ -48,7 +48,7 @@ jobs:
         run: python -m scripts.restore_monitor_state --output-dir .state
       - name: Check PostgreSQL availability
         id: db
-        run: python -m scripts.database_preflight --github-output "${GITHUB_OUTPUT}"
+        run: python -m scripts.database_preflight --github-output "${GITHUB_OUTPUT}" --report eth_reports/governance/database_health.json
       - name: Degrade persistence when PostgreSQL is unavailable
         if: steps.db.outputs.available != 'true'
         shell: bash

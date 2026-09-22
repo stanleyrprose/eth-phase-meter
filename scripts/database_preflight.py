@@ -4,6 +4,7 @@ import argparse
 from dataclasses import asdict, dataclass
 import json
 import os
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -63,10 +64,15 @@ def _append_github_output(path: str | None, health: DatabaseHealth) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check PostgreSQL availability without exposing the DSN.")
     parser.add_argument("--github-output", default=os.getenv("GITHUB_OUTPUT"))
+    parser.add_argument("--report")
     args = parser.parse_args()
 
     health = check_database(os.getenv("DATABASE_URL"))
     _append_github_output(args.github_output, health)
+    if args.report:
+        target = Path(args.report)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(health.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(health.to_dict(), sort_keys=True))
     return 0
 

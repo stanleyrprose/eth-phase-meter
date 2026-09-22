@@ -51,6 +51,16 @@ jobs:
           tests/test_forecast_production_closure.py
       - name: Generate M1-M9 deterministic implementation evidence
         run: python -m scripts.validate_forecast_research_plan
+      - name: Check PostgreSQL availability
+        id: db
+        run: python -m scripts.database_preflight --github-output "${GITHUB_OUTPUT}" --report eth_reports/governance/database_health.json
+      - name: Degrade external persistence contract when PostgreSQL is unavailable
+        if: steps.db.outputs.available != 'true'
+        shell: bash
+        run: |
+          printf '%s=\n' 'DATABASE_URL' >> "${GITHUB_ENV}"
+          echo "ETH_PERSISTENCE_DEGRADED=1" >> "${GITHUB_ENV}"
+          echo "PostgreSQL external contract degraded: ${{ steps.db.outputs.reason }}" >> "${GITHUB_STEP_SUMMARY}"
       - name: Apply versioned migrations
         run: python -m scripts.apply_migrations
       - name: Runtime provider and PostgreSQL contracts
@@ -69,5 +79,6 @@ jobs:
             eth_reports/forecast-research/
             eth_reports/contracts/
             eth_reports/governance/migration_report.json
+            eth_reports/governance/database_health.json
           if-no-files-found: error
           retention-days: 90
