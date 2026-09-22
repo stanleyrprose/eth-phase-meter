@@ -36,6 +36,8 @@ def test_bkk_tunnel_contract_is_localhost_only_and_passwordless_over_ssh():
     assert "-L 127.0.0.1:15432:127.0.0.1:5432" in text
     assert "postgresql://eth_phase_meter@127.0.0.1:15432/eth_phase_meter?sslmode=disable" in text
     assert "root@43.133.101.242" in text
+    assert "printf '%s=%s\\\\n' 'DATABASE_URL'" not in text
+    assert "printf '%s=%s\\n' 'DATABASE_URL'" in text
 
 
 def test_bkk_server_provisioning_never_exposes_postgres_publicly():
