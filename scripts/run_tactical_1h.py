@@ -6,7 +6,8 @@ from pathlib import Path
 
 import eth_phase_meter as core
 from eth_trend_v3.dataset import load_pit_records
-from eth_trend_v3.persistence import load_latest_record, persist_json_record
+from eth_trend_v3.persistence import persist_json_record
+from eth_trend_v3.state_fallback import load_state_record
 from eth_trend_v3.runner import _process_tactical_1h, run_one
 
 
@@ -14,11 +15,18 @@ OUTPUT = Path(core.OUTPUT_DIR)
 
 
 def main():
-    previous = load_latest_record("monitor_state_1h") or {}
-    primary_4h = load_latest_record("monitor_state_4h") or {}
+    previous, previous_source = load_state_record("monitor_state_1h")
+    primary_4h, primary_4h_source = load_state_record("monitor_state_4h")
+    previous = previous or {}
+    primary_4h = primary_4h or {}
     history = load_pit_records(os.getenv("DATABASE_URL"))
 
     result, payload = run_one("1h", history)
+    payload["state_sources"] = {
+        "previous_1h": previous_source,
+        "confirmation_4h": primary_4h_source,
+    }
+    payload["persistence_degraded"] = os.getenv("ETH_PERSISTENCE_DEGRADED") == "1"
     decision = _process_tactical_1h(result, payload, primary_4h, previous)
 
     persist_json_record("monitor_state_1h", payload)

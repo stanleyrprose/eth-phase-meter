@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: eth-tactical-1h
@@ -30,6 +31,7 @@ jobs:
       ETH_STRUCTURAL_API_URL: ${{ secrets.ETH_STRUCTURAL_API_URL }}
       ETH_STRUCTURAL_API_TOKEN: ${{ secrets.ETH_STRUCTURAL_API_TOKEN }}
       BINANCE_EGRESS_SSH_KEY: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
+      GITHUB_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@v5
@@ -41,6 +43,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.lock
+      - name: Restore latest successful monitor state
+        continue-on-error: true
+        run: python -m scripts.restore_monitor_state --output-dir .state
+      - name: Check PostgreSQL availability
+        id: db
+        run: python -m scripts.database_preflight --github-output "${GITHUB_OUTPUT}" --report eth_reports/governance/database_health.json
+      - name: Degrade persistence when PostgreSQL is unavailable
+        if: steps.db.outputs.available != 'true'
+        shell: bash
+        run: |
+          printf '%s=\n' 'DATABASE_URL' >> "${GITHUB_ENV}"
+          echo "ETH_PERSISTENCE_DEGRADED=1" >> "${GITHUB_ENV}"
       - name: Validate tactical runtime
         shell: bash
         run: |
@@ -49,8 +63,7 @@ jobs:
             exit 1
           fi
           if [[ -z "$DATABASE_URL" ]]; then
-            echo "ERROR: DATABASE_URL is required for durable hourly state comparison."
-            exit 1
+            echo "WARNING: PostgreSQL unavailable; using restored GitHub artifact state and artifact-only PIT."
           fi
       - name: Start Binance BKK egress
         continue-on-error: true

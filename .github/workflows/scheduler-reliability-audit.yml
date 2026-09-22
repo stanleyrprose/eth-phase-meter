@@ -1,0 +1,53 @@
+name: ETH Scheduler Reliability Audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 2 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: eth-scheduler-reliability-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Audit 24h sampling reliability
+        id: audit
+        run: |
+          python -m scripts.scheduler_reliability_report \
+            --hours 24 \
+            --report scheduler-reliability-report.json \
+            --github-output "${GITHUB_OUTPUT}"
+      - name: Alert unhealthy reliability
+        if: steps.audit.outputs.healthy != 'true'
+        continue-on-error: true
+        run: >-
+          python -m scripts.send_system_health
+          --component "Scheduler reliability"
+          --status DEGRADED
+          --reason "24H_AUDIT_FAILED"
+          --impact "Coverage ${{ steps.audit.outputs.coverage_pct }}%; missing ${{ steps.audit.outputs.missing_count }} bucket(s); P95 dispatch delay ${{ steps.audit.outputs.p95_delay_minutes }} min."
+      - name: Upload reliability report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scheduler-reliability-${{ github.run_id }}
+          path: scheduler-reliability-report.json
+          if-no-files-found: error
+          retention-days: 30

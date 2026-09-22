@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: eth-scheduled-monitor
@@ -31,6 +32,7 @@ jobs:
       ETH_STRUCTURAL_API_TOKEN: ${{ secrets.ETH_STRUCTURAL_API_TOKEN }}
       BINANCE_EGRESS_SSH_KEY: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
       ETH_FILTER_1H_BY_4H: "1"
+      GITHUB_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@v5
@@ -42,6 +44,27 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.lock
+      - name: Restore latest successful monitor state
+        continue-on-error: true
+        run: python -m scripts.restore_monitor_state --output-dir .state
+      - name: Check PostgreSQL availability
+        id: db
+        run: python -m scripts.database_preflight --github-output "${GITHUB_OUTPUT}" --report eth_reports/governance/database_health.json
+      - name: Degrade persistence when PostgreSQL is unavailable
+        if: steps.db.outputs.available != 'true'
+        shell: bash
+        run: |
+          printf '%s=\n' 'DATABASE_URL' >> "${GITHUB_ENV}"
+          echo "ETH_PERSISTENCE_DEGRADED=1" >> "${GITHUB_ENV}"
+      - name: Notify degraded persistence
+        if: steps.db.outputs.available != 'true'
+        continue-on-error: true
+        run: >-
+          python -m scripts.send_system_health
+          --component "PostgreSQL persistence"
+          --status DEGRADED
+          --reason "${{ steps.db.outputs.reason }}"
+          --impact "Durable PIT/state persistence is unavailable; 4H/1H continue from GitHub artifact fallback."
       - name: Validate required secrets
         shell: bash
         run: |

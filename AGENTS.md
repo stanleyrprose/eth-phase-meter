@@ -328,19 +328,22 @@ The production compute workflows are dispatch-only. GitHub scheduled cron was ob
 Primary scheduler:
 
 ```text
-Mac mini launchd at minute 20 every hour
-→ scripts/external_scheduler_dispatch.py
-→ missing current 4H bucket: dispatch scheduled-monitor.yml
-→ otherwise, on non-boundary hours, missing current 1H bucket: dispatch tactical-1h.yml
+Mac mini launchd polls every 5 minutes
+→ scripts/external_scheduler_dispatch.py uses UTC nominal buckets at :15
+→ 4H boundary hour: dispatch scheduled-monitor.yml only when the current 4H bucket has no attempt
+→ non-boundary hour: dispatch tactical-1h.yml independently of 4H health
 ```
 
-The external scheduler checks GitHub run state before dispatching. Active or successful current-bucket runs count as covered; failed runs can be retried. A missing 4H Strategic bucket takes priority because that run also produces the current 1H sample.
+The 5-minute poll is intentional: launchd calendar times use the Mac's local timezone, while the ETH sampling contract is UTC. The scheduler therefore uses a timezone-agnostic interval and lets the Python UTC bucket logic decide whether work is due. Active/successful current-bucket runs count as covered, and a failed current-bucket attempt is not retried repeatedly by the primary scheduler.
 
-GitHub Actions watchdogs remain best-effort fallback:
-- scheduled-monitor-watchdog.yml checks 4H freshness hourly at :45 and recovers after 4.25h staleness;
-- tactical-1h-watchdog.yml checks non-boundary 1H hours at :45 and recovers after 1.25h staleness.
+GitHub Actions watchdogs remain best-effort recovery and operational alerting:
+- scheduled-monitor-watchdog.yml checks 4H freshness one hour after each 4H boundary;
+- tactical-1h-watchdog.yml checks non-boundary 1H freshness at :45;
+- scheduler-reliability-audit.yml audits 24 hourly buckets daily for missing buckets, duplicates, and P95 dispatch delay.
 
-On the six 4H boundary hours (00/04/08/12/16/20 UTC), the strategic workflow computes both 4H and 1H so the combined monitor artifact remains compatible with Meta Decision/Kronos. Every 1H observation is persisted, but Telegram is sent only for significant state changes (direction-band/state/regime/gate transitions or material direction moves). The latest persisted 4H state is used for confirmation.
+PostgreSQL remains the preferred durable persistence layer. If PostgreSQL is configured but temporarily unavailable, the production workflows explicitly enter degraded persistence mode instead of stopping all computation. Latest successful 1H/4H state is restored from GitHub artifacts, new PIT/state output remains in run artifacts, and an ETH System Health Telegram alert identifies the persistence failure. A stale or unavailable 4H confirmation forces the 1H Gate to WAIT, but it does not suppress a material 1H change notification.
+
+On the six 4H boundary hours (00/04/08/12/16/20 UTC), the strategic workflow computes both 4H and 1H so the combined monitor artifact remains compatible with Meta Decision/Kronos. Every available 1H observation is recorded in the run artifact; durable PostgreSQL persistence is separately represented and never fabricated. Telegram market alerts remain change-driven.
 
 Never commit secret values into workflow YAML, examples, tests, docs, logs, or reports.
 
