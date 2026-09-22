@@ -26,6 +26,16 @@ jobs:
           cache: pip
       - name: Install locked dependencies
         run: pip install -r requirements.lock
+      - name: Check PostgreSQL availability
+        id: db
+        run: python -m scripts.database_preflight --github-output "${GITHUB_OUTPUT}" --report eth_reports/governance/database_health.json
+      - name: Enter fail-closed shadow mode when PostgreSQL is unavailable
+        if: steps.db.outputs.available != 'true'
+        shell: bash
+        run: |
+          printf '%s=\n' 'DATABASE_URL' >> "${GITHUB_ENV}"
+          echo "ETH_PERSISTENCE_DEGRADED=1" >> "${GITHUB_ENV}"
+          echo "Shadow cycle skipped safely: durable PostgreSQL unavailable (${{ steps.db.outputs.reason }})." >> "${GITHUB_STEP_SUMMARY}"
       - name: Apply versioned migrations
         run: python -m scripts.apply_migrations
       - name: Run shadow creation and settlement
@@ -37,5 +47,6 @@ jobs:
           path: |
             eth_reports/shadow/
             eth_reports/governance/migration_report.json
+            eth_reports/governance/database_health.json
           if-no-files-found: error
           retention-days: 90
