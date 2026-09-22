@@ -1,0 +1,79 @@
+name: PostgreSQL Persistence Recovery Watch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "20 */6 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: postgres-persistence-recovery-watch
+  cancel-in-progress: true
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install locked dependencies
+        run: pip install -r requirements-ci.lock
+
+      - name: Restore previous recovery-watch state
+        shell: bash
+        run: |
+          mkdir -p .recovery/previous
+          previous_run="$(
+            gh api               "/repos/${GITHUB_REPOSITORY}/actions/workflows/postgres-recovery-watch.yml/runs?branch=main&status=success&per_page=10"               --jq '.workflow_runs[0].id // empty'
+          )"
+          if [[ -n "${previous_run}" ]]; then
+            gh run download "${previous_run}"               --repo "${GITHUB_REPOSITORY}"               --name postgres-recovery-state               --dir .recovery/previous || true
+          fi
+
+      - name: Probe PostgreSQL and evaluate recovery transition
+        id: watch
+        run: |
+          python -m scripts.persistence_recovery_watch             --previous-state .recovery/previous/postgres-recovery-state.json             --state-output postgres-recovery-state.json             --github-output "${GITHUB_OUTPUT}"
+
+      - name: Notify recovered persistence
+        if: steps.watch.outputs.recovered == 'true'
+        run: >-
+          python -m scripts.send_system_health
+          --component "PostgreSQL persistence"
+          --status RECOVERED
+          --reason "DATABASE_REACHABLE"
+          --impact "Durable PostgreSQL connectivity is restored. The next 1H/4H production run will automatically resume POSTGRES persistence."
+
+      - name: Write recovery-watch summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## PostgreSQL Persistence Recovery Watch" >> "${GITHUB_STEP_SUMMARY}"
+          echo >> "${GITHUB_STEP_SUMMARY}"
+          echo "- transition: ${{ steps.watch.outputs.transition }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- available: ${{ steps.watch.outputs.available }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- reason: ${{ steps.watch.outputs.reason }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- recovered notification: ${{ steps.watch.outputs.recovered }}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload recovery-watch state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-recovery-state
+          path: postgres-recovery-state.json
+          if-no-files-found: error
+          retention-days: 90
