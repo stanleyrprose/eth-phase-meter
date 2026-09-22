@@ -35,7 +35,7 @@ runs:
         rc=$?
         set -e
 
-        echo "DATABASE_URL=postgresql://eth_phase_meter@127.0.0.1:15432/eth_phase_meter?sslmode=disable" >> "${GITHUB_ENV}"
+        printf '%s=%s\\n' 'DATABASE_URL' 'postgresql://eth_phase_meter@127.0.0.1:15432/eth_phase_meter?sslmode=disable' >> "${GITHUB_ENV}"
         echo "BKK_POSTGRES_TUNNEL_RC=${rc}" >> "${GITHUB_ENV}"
 
         if [[ "${rc}" -ne 0 ]]; then
