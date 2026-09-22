@@ -64,3 +64,11 @@ def test_migration_workflow_uses_known_good_backup_and_pg18_restore():
     assert "required_tables_missing" in text
     assert "TRUSTED_ADMIN_SSH" in text
     assert "Provision PostgreSQL 18 on BKK" not in text
+
+
+def test_db_workflows_do_not_leave_empty_job_env_blocks():
+    import re
+
+    for name in DB_WORKFLOWS:
+        text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+        assert re.search(r"^    env:\n    steps:$", text, flags=re.MULTILINE) is None, name
