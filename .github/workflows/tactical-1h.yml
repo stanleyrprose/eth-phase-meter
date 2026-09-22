@@ -18,7 +18,6 @@ jobs:
     env:
       TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       DUNE_API_KEY: ${{ secrets.DUNE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
@@ -35,6 +34,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+      - name: Setup BKK PostgreSQL tunnel
+        uses: ./.github/actions/setup-bkk-postgres
+        with:
+          ssh-key: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"

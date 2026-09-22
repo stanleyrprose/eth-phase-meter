@@ -11,9 +11,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v5
+      - name: Setup BKK PostgreSQL tunnel
+        uses: ./.github/actions/setup-bkk-postgres
+        with:
+          ssh-key: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
