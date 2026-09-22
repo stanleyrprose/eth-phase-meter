@@ -47,7 +47,7 @@ payload = {
         "HOME": str(Path.home()),
         "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     },
-    "StartCalendarInterval": {"Minute": 20},
+    "StartInterval": 300,
     "RunAtLoad": True,
     "ProcessType": "Background",
     "StandardOutPath": str(Path(log_dir) / "scheduler.log"),

@@ -35,10 +35,16 @@ def bucket_start(now: datetime, cadence_hours: int, minute: int = NOMINAL_MINUTE
     return shifted.replace(hour=bucket_hour, minute=0, second=0, microsecond=0) + timedelta(minutes=minute)
 
 
-def _run_is_valid_for_bucket(run: Mapping[str, Any], start: datetime) -> bool:
-    created = _parse_utc(run.get("created_at") or run.get("run_started_at"))
-    if created is None or created < start:
-        return False
+def _bucket_runs(payload: Mapping[str, Any], start: datetime) -> list[Mapping[str, Any]]:
+    out: list[Mapping[str, Any]] = []
+    for run in payload.get("workflow_runs", []):
+        created = _parse_utc(run.get("created_at") or run.get("run_started_at"))
+        if created is not None and created >= start:
+            out.append(run)
+    return out
+
+
+def _run_is_covered(run: Mapping[str, Any]) -> bool:
     status = str(run.get("status") or "").lower()
     conclusion = str(run.get("conclusion") or "").lower()
     if status in ACTIVE_STATUSES:
@@ -47,7 +53,11 @@ def _run_is_valid_for_bucket(run: Mapping[str, Any], start: datetime) -> bool:
 
 
 def bucket_has_run(payload: Mapping[str, Any], start: datetime) -> bool:
-    return any(_run_is_valid_for_bucket(run, start) for run in payload.get("workflow_runs", []))
+    return any(_run_is_covered(run) for run in _bucket_runs(payload, start))
+
+
+def bucket_has_attempt(payload: Mapping[str, Any], start: datetime) -> bool:
+    return bool(_bucket_runs(payload, start))
 
 
 @dataclass(frozen=True)
@@ -74,24 +84,38 @@ def decide(*, now: datetime, strategic_runs: Mapping[str, Any], tactical_runs: M
     if now.minute < NOMINAL_MINUTE:
         return DispatchDecision("SKIP", None, None, "BEFORE_NOMINAL_MINUTE")
 
-    strategic_start = bucket_start(now, 4)
-    if not bucket_has_run(strategic_runs, strategic_start):
-        return DispatchDecision("DISPATCH", STRATEGIC_WORKFLOW, strategic_start.isoformat(), "STRATEGIC_BUCKET_MISSING")
-
     if now.hour % 4 == 0:
-        return DispatchDecision("SKIP", None, strategic_start.isoformat(), "STRATEGIC_RUN_COVERS_BOUNDARY_1H")
+        strategic_start = bucket_start(now, 4)
+        if bucket_has_run(strategic_runs, strategic_start):
+            return DispatchDecision("SKIP", None, strategic_start.isoformat(), "STRATEGIC_RUN_COVERS_BOUNDARY_1H")
+        if bucket_has_attempt(strategic_runs, strategic_start):
+            return DispatchDecision("SKIP", None, strategic_start.isoformat(), "STRATEGIC_BUCKET_ALREADY_ATTEMPTED")
+        return DispatchDecision(
+            "DISPATCH",
+            STRATEGIC_WORKFLOW,
+            strategic_start.isoformat(),
+            "STRATEGIC_BUCKET_MISSING",
+        )
 
     tactical_start = bucket_start(now, 1)
-    if not bucket_has_run(tactical_runs, tactical_start):
-        return DispatchDecision("DISPATCH", TACTICAL_WORKFLOW, tactical_start.isoformat(), "TACTICAL_BUCKET_MISSING")
-
-    return DispatchDecision("SKIP", None, tactical_start.isoformat(), "CURRENT_BUCKET_ALREADY_COVERED")
+    if bucket_has_run(tactical_runs, tactical_start):
+        return DispatchDecision("SKIP", None, tactical_start.isoformat(), "CURRENT_BUCKET_ALREADY_COVERED")
+    if bucket_has_attempt(tactical_runs, tactical_start):
+        return DispatchDecision("SKIP", None, tactical_start.isoformat(), "TACTICAL_BUCKET_ALREADY_ATTEMPTED")
+    return DispatchDecision(
+        "DISPATCH",
+        TACTICAL_WORKFLOW,
+        tactical_start.isoformat(),
+        "TACTICAL_BUCKET_MISSING",
+    )
 
 
 def _gh_json(gh: str, repo: str, workflow: str) -> dict[str, Any]:
     completed = subprocess.run(
-        [gh, "api", f"/repos/{repo}/actions/workflows/{workflow}/runs?branch=main&per_page=20"],
-        check=True, text=True, capture_output=True,
+        [gh, "api", f"/repos/{repo}/actions/workflows/{workflow}/runs?branch=main&per_page=40"],
+        check=True,
+        text=True,
+        capture_output=True,
     )
     return json.loads(completed.stdout)
 
