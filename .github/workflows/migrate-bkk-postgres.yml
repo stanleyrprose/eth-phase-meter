@@ -21,22 +21,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Configure BKK SSH
-        shell: bash
-        env:
-          BKK_SSH_KEY: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
-        run: |
-          set -euo pipefail
-          test -n "${BKK_SSH_KEY}"
-          install -m 700 -d "${HOME}/.ssh"
-          printf '%s\n' "${BKK_SSH_KEY}" > "${HOME}/.ssh/bkk_postgres_provision"
-          chmod 600 "${HOME}/.ssh/bkk_postgres_provision"
-          cp config/binance_egress_known_hosts "${HOME}/.ssh/bkk_postgres_known_hosts"
-
-      - name: Provision PostgreSQL 18 on BKK
+      - name: Record pre-provisioned server boundary
         shell: bash
         run: |
-          ssh             -i "${HOME}/.ssh/bkk_postgres_provision"             -o IdentitiesOnly=yes             -o StrictHostKeyChecking=yes             -o UserKnownHostsFile="${HOME}/.ssh/bkk_postgres_known_hosts"             root@43.133.101.242             'bash -s' < scripts/provision_bkk_postgres.sh
+          mkdir -p eth_reports/migration
+          cat > eth_reports/migration/server-provisioning.json <<'JSON'
+          {
+            "status": "PREPROVISIONED",
+            "path": "TRUSTED_ADMIN_SSH",
+            "postgres_major": 18,
+            "public_postgres_port": false,
+            "note": "GitHub BKK key is intentionally used for port forwarding only; server provisioning is performed through the trusted admin SSH path."
+          }
+          JSON
 
       - name: Setup required BKK PostgreSQL tunnel
         uses: ./.github/actions/setup-bkk-postgres
