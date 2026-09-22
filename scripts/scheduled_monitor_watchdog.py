@@ -71,8 +71,8 @@ def evaluate_runs(
     now = now.astimezone(timezone.utc)
     if expected_cadence_hours <= 0:
         raise ValueError("expected_cadence_hours must be positive")
-    if stale_after_hours <= expected_cadence_hours:
-        raise ValueError("stale_after_hours must exceed expected cadence")
+    if stale_after_hours <= 0:
+        raise ValueError("stale_after_hours must be positive")
 
     raw_runs = payload.get("workflow_runs", []) if isinstance(payload, Mapping) else payload
     runs = [dict(item) for item in raw_runs]

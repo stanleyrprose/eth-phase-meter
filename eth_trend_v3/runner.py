@@ -10,7 +10,7 @@ from .engine import evaluate
 from .notify import telegram_text, prd_summary, tactical_summary
 from .storage import update_history
 from .pit import build_pit_record, write_pit_snapshot, write_run_manifest
-from .persistence import persist_json_record, persistence_mode, load_latest_record
+from .persistence import persist_json_record, persistence_mode
 from .feature_cluster import cluster_factors
 from .feature_metadata import enrich_factor_metadata
 from .market_state import build_market_state
@@ -31,8 +31,10 @@ from .production_control import evaluate_runtime_demotion
 from .shadow_forecast import new_shadow_record, persist_shadow
 from .structural_flow import enrich_staking_netflow
 from .tactical_alerts import notification_reasons, render_notification_reasons
+from .state_fallback import load_state_record, state_age_hours
 
 OUTPUT = Path(core.OUTPUT_DIR)
+MAX_4H_CONFIRMATION_AGE_HOURS = 6.0
 
 
 def _current_features(market_state, regime=None):
@@ -263,7 +265,8 @@ def run_one(timeframe, history_records):
         "anomalies": anomalies,
     }
 
-    previous = load_latest_record(f"monitor_state_{timeframe}") or {}
+    previous, _ = load_state_record(f"monitor_state_{timeframe}")
+    previous = previous or {}
     payload["alerts"] = build_alerts(payload, previous, anomalies=anomalies)
     if model_health.get("status") != "NORMAL":
         payload["alerts"].append({"level": 3, "type": model_health.get("status"), "message": json.dumps(model_health, ensure_ascii=False, default=str)})
@@ -323,24 +326,33 @@ def _send_tactical_1h(result, payload_1h, triggers=None):
 
 
 def _process_tactical_1h(result, payload_1h, primary_4h, previous_1h):
+    confirmation_age = state_age_hours(primary_4h)
     if primary_4h.get("rule_direction") is None:
         result.execution_gate = "WAIT"
         result.execution_reason = "缺少最新4H状态"
-        decision = {"status": "SKIPPED", "reason": "NO_4H_STATE", "triggers": []}
+    elif confirmation_age is None:
+        result.execution_gate = "WAIT"
+        result.execution_reason = "4H状态时间戳不可用"
+    elif confirmation_age > MAX_4H_CONFIRMATION_AGE_HOURS:
+        result.execution_gate = "WAIT"
+        result.execution_reason = f"4H状态过期 ({confirmation_age:.1f}h)"
     else:
         apply_4h_confirmation(result, int(primary_4h["rule_direction"]))
-        if not previous_1h:
-            decision = {"status": "SKIPPED", "reason": "BASELINE_ESTABLISHED", "triggers": []}
+
+    if not previous_1h:
+        decision = {"status": "SKIPPED", "reason": "BASELINE_ESTABLISHED", "triggers": []}
+    else:
+        triggers = notification_reasons(result, previous_1h)
+        if triggers:
+            notification = _send_tactical_1h(result, payload_1h, triggers=triggers)
+            decision = {**notification, "reason": "SIGNIFICANT_CHANGE", "triggers": triggers}
         else:
-            triggers = notification_reasons(result, previous_1h)
-            if triggers:
-                notification = _send_tactical_1h(result, payload_1h, triggers=triggers)
-                decision = {**notification, "reason": "SIGNIFICANT_CHANGE", "triggers": triggers}
-            else:
-                decision = {"status": "SKIPPED", "reason": "NO_SIGNIFICANT_CHANGE", "triggers": []}
+            reason = "NO_4H_STATE" if primary_4h.get("rule_direction") is None else "NO_SIGNIFICANT_CHANGE"
+            decision = {"status": "SKIPPED", "reason": reason, "triggers": []}
 
     payload_1h["execution_gate"] = result.execution_gate
     payload_1h["execution_reason"] = result.execution_reason
+    payload_1h["confirmation_4h_age_hours"] = round(confirmation_age, 3) if confirmation_age is not None else None
     payload_1h["available_bias"] = result.available_bias
     payload_1h["tactical_state"] = result.state
     payload_1h["rule_regime"] = result.regime
@@ -350,7 +362,8 @@ def _process_tactical_1h(result, payload_1h, primary_4h, previous_1h):
 
 def main():
     history = load_pit_records(os.getenv("DATABASE_URL"))
-    previous_1h = load_latest_record("monitor_state_1h") or {}
+    previous_1h, _ = load_state_record("monitor_state_1h")
+    previous_1h = previous_1h or {}
     r4, p4 = run_one("4h", history)
     r1, p1 = run_one("1h", history)
     tactical_decision = _process_tactical_1h(r1, p1, p4, previous_1h)
