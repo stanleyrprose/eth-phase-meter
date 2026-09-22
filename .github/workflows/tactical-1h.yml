@@ -53,7 +53,7 @@ jobs:
         if: steps.db.outputs.available != 'true'
         shell: bash
         run: |
-          echo "DATABASE_URL=" >> "${GITHUB_ENV}"
+          printf \'%s=\\n\' \'DATABASE_URL\' >> "${GITHUB_ENV}"
           echo "ETH_PERSISTENCE_DEGRADED=1" >> "${GITHUB_ENV}"
       - name: Validate tactical runtime
         shell: bash
