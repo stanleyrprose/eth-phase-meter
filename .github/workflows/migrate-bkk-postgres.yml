@@ -1,0 +1,165 @@
+name: Migrate Durable PostgreSQL to BKK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bkk-postgres-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure BKK SSH
+        shell: bash
+        env:
+          BKK_SSH_KEY: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${BKK_SSH_KEY}"
+          install -m 700 -d "${HOME}/.ssh"
+          printf '%s\n' "${BKK_SSH_KEY}" > "${HOME}/.ssh/bkk_postgres_provision"
+          chmod 600 "${HOME}/.ssh/bkk_postgres_provision"
+          cp config/binance_egress_known_hosts "${HOME}/.ssh/bkk_postgres_known_hosts"
+
+      - name: Provision PostgreSQL 18 on BKK
+        shell: bash
+        run: |
+          ssh             -i "${HOME}/.ssh/bkk_postgres_provision"             -o IdentitiesOnly=yes             -o StrictHostKeyChecking=yes             -o UserKnownHostsFile="${HOME}/.ssh/bkk_postgres_known_hosts"             root@43.133.101.242             'bash -s' < scripts/provision_bkk_postgres.sh
+
+      - name: Setup required BKK PostgreSQL tunnel
+        uses: ./.github/actions/setup-bkk-postgres
+        with:
+          ssh-key: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
+          required: "true"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install locked CI dependencies
+        run: pip install -r requirements-ci.lock
+
+      - name: Verify new database connectivity
+        id: db
+        run: python -m scripts.database_preflight --github-output "${GITHUB_OUTPUT}" --report eth_reports/migration/bkk_database_health.json
+
+      - name: Require healthy BKK PostgreSQL
+        shell: bash
+        run: |
+          if [[ "${{ steps.db.outputs.available }}" != "true" ]]; then
+            echo "ERROR: BKK PostgreSQL is not reachable: ${{ steps.db.outputs.reason }}"
+            exit 1
+          fi
+
+      - name: Inspect target database
+        id: target
+        shell: bash
+        run: |
+          table_count="$(
+            python - <<'PY'
+          import os
+          import psycopg
+          with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+              with conn.cursor() as cur:
+                  cur.execute("SELECT count(*) FROM pg_tables WHERE schemaname='public'")
+                  print(cur.fetchone()[0])
+          PY
+          )"
+          echo "table_count=${table_count}" >> "${GITHUB_OUTPUT}"
+          echo "Target public table count before restore: ${table_count}"
+
+      - name: Download latest known-good Neon PIT backup
+        if: steps.target.outputs.table_count == '0'
+        shell: bash
+        run: |
+          mkdir -p eth_reports/migration/restore
+          gh run download 35581618650             --repo "${GITHUB_REPOSITORY}"             --dir eth_reports/migration/restore
+          dump="$(find eth_reports/migration/restore -name eth-phase-meter.dump -print -quit)"
+          test -n "${dump}"
+          backup_dir="$(dirname "${dump}")"
+          (
+            cd "${backup_dir}"
+            sha256sum -c SHA256SUMS
+          )
+          echo "RESTORE_DUMP=${dump}" >> "${GITHUB_ENV}"
+
+      - name: Restore PIT backup into BKK PostgreSQL
+        if: steps.target.outputs.table_count == '0'
+        shell: bash
+        run: |
+          docker run --rm             --network host             -e DATABASE_URL             -v "${GITHUB_WORKSPACE}/eth_reports/migration/restore:/restore:ro"             postgres:18             sh -lc '
+              dump="$(find /restore -name eth-phase-meter.dump -print -quit)"
+              test -n "$dump"
+              pg_restore                 --dbname "$DATABASE_URL"                 --no-owner                 --no-acl                 --exit-on-error                 "$dump"
+            '
+
+      - name: Apply current versioned migrations
+        run: python -m scripts.apply_migrations
+
+      - name: Verify restored durable state
+        shell: bash
+        run: |
+          python - <<'PY' | tee eth_reports/migration/bkk_restore_verification.json
+          import json
+          import os
+          import psycopg
+
+          required = [
+              "eth_monitor_records",
+              "eth_experiment_registry",
+              "eth_model_transition_log",
+              "eth_forecasts",
+              "eth_model_artifacts",
+              "eth_research_gate_versions",
+              "eth_holdout_registry",
+              "eth_override_log",
+              "eth_model_control_state",
+              "eth_model_states",
+          ]
+          with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+              with conn.cursor() as cur:
+                  cur.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'")
+                  tables = sorted(row[0] for row in cur.fetchall())
+                  counts = {}
+                  for table in ("eth_monitor_records", "eth_forecasts"):
+                      if table in tables:
+                          cur.execute(f'SELECT count(*) FROM "{table}"')
+                          counts[table] = cur.fetchone()[0]
+
+          missing = sorted(set(required) - set(tables))
+          report = {
+              "database": "BKK_LOCALHOST_OVER_SSH",
+              "postgres_major": 18,
+              "required_tables_missing": missing,
+              "counts": counts,
+              "table_count": len(tables),
+              "status": "PASS" if not missing else "FAIL",
+          }
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if missing:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload migration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bkk-postgres-migration-${{ github.run_id }}
+          path: |
+            eth_reports/migration/
+            eth_reports/governance/migration_report.json
+          if-no-files-found: error
+          retention-days: 90
