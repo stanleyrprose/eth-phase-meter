@@ -1,0 +1,48 @@
+name: Setup BKK PostgreSQL Tunnel
+description: Reuse the existing BKK SSH credential to expose localhost-only PostgreSQL to one GitHub Actions job.
+
+inputs:
+  ssh-key:
+    description: Existing BINANCE_EGRESS_SSH_KEY GitHub secret.
+    required: true
+  required:
+    description: Fail immediately if the SSH tunnel cannot be established.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Start BKK PostgreSQL SSH tunnel
+      shell: bash
+      env:
+        BKK_POSTGRES_SSH_KEY: ${{ inputs.ssh-key }}
+        BKK_POSTGRES_REQUIRED: ${{ inputs.required }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${BKK_POSTGRES_SSH_KEY}" ]]; then
+          echo "ERROR: BKK SSH key is not configured." >&2
+          exit 1
+        fi
+
+        install -m 700 -d "${HOME}/.ssh"
+        printf '%s\n' "${BKK_POSTGRES_SSH_KEY}" > "${HOME}/.ssh/bkk_postgres"
+        chmod 600 "${HOME}/.ssh/bkk_postgres"
+        cp "${GITHUB_WORKSPACE}/config/binance_egress_known_hosts" "${HOME}/.ssh/bkk_postgres_known_hosts"
+
+        set +e
+        ssh -fNT           -L 127.0.0.1:15432:127.0.0.1:5432           -i "${HOME}/.ssh/bkk_postgres"           -o IdentitiesOnly=yes           -o StrictHostKeyChecking=yes           -o UserKnownHostsFile="${HOME}/.ssh/bkk_postgres_known_hosts"           -o ExitOnForwardFailure=yes           -o ServerAliveInterval=30           root@43.133.101.242
+        rc=$?
+        set -e
+
+        printf '%s=%s\\n' 'DATABASE_URL' 'postgresql://eth_phase_meter@127.0.0.1:15432/eth_phase_meter?sslmode=disable' >> "${GITHUB_ENV}"
+        echo "BKK_POSTGRES_TUNNEL_RC=${rc}" >> "${GITHUB_ENV}"
+
+        if [[ "${rc}" -ne 0 ]]; then
+          echo "WARNING: BKK PostgreSQL tunnel could not be established (rc=${rc})."
+          if [[ "${BKK_POSTGRES_REQUIRED}" == "true" ]]; then
+            exit "${rc}"
+          fi
+        else
+          echo "OK: BKK PostgreSQL SSH tunnel established on 127.0.0.1:15432."
+        fi

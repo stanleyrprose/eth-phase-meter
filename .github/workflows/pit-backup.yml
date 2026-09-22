@@ -17,9 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v5
+      - name: Setup BKK PostgreSQL tunnel
+        uses: ./.github/actions/setup-bkk-postgres
+        with:
+          ssh-key: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
       - name: Require database
         run: |
           if [[ -z "$DATABASE_URL" ]]; then
@@ -30,6 +33,7 @@ jobs:
         run: |
           mkdir -p eth_reports/backups
           docker run --rm \
+            --network host \
             -e DATABASE_URL \
             -v "$PWD/eth_reports/backups:/backup" \
             postgres:18 \
@@ -37,6 +41,7 @@ jobs:
       - name: Verify archive can be read by PostgreSQL 18 pg_restore
         run: |
           docker run --rm \
+            --network host \
             -v "$PWD/eth_reports/backups:/backup" \
             postgres:18 \
             sh -lc 'pg_restore --list /backup/eth-phase-meter.dump' \

@@ -228,9 +228,19 @@ A test or backtest that leaks future data is invalid even if metrics improve.
 
 ## 10. Persistence
 
-External PostgreSQL persistence is preferred where configured.
+The canonical durable persistence target is self-hosted PostgreSQL 18 on the existing Bangkok VPS.
 
-Artifact-only persistence is an explicitly degraded mode, not equivalent durability.
+Access contract:
+
+```text
+GitHub Actions
+→ existing BINANCE_EGRESS_SSH_KEY
+→ SSH local port forward 127.0.0.1:15432
+→ BKK PostgreSQL 127.0.0.1:5432
+→ database/role: eth_phase_meter
+```
+
+PostgreSQL must not listen on a public interface. GitHub workflows that need durable persistence must use `.github/actions/setup-bkk-postgres`; they must not depend on a SaaS `secrets.DATABASE_URL`. The historical Neon database is retired as a production dependency after BKK migration. Artifact-only persistence is an explicitly degraded mode, not equivalent durability.
 
 Rules:
 
@@ -342,7 +352,7 @@ GitHub Actions watchdogs remain best-effort recovery and operational alerting:
 - scheduler-reliability-audit.yml audits 24 hourly buckets daily for missing buckets, duplicates, and P95 dispatch delay;
 - postgres-recovery-watch.yml probes external PostgreSQL every six hours and persists its own transition state in a GitHub Actions artifact so recovery detection does not depend on PostgreSQL itself.
 
-PostgreSQL remains the preferred durable persistence layer. If PostgreSQL is configured but temporarily unavailable, the production monitor workflows explicitly enter degraded persistence mode instead of stopping all computation. Latest successful 1H/4H state is restored from GitHub artifacts, new PIT/state output remains in run artifacts, and an ETH System Health Telegram alert identifies the persistence failure. The recovery watch establishes a baseline without notification, stays silent while availability is unchanged, and sends one RECOVERED Telegram notification only on an unavailable-to-available transition. No recovery flag is stored outside the normal runtime: each production workflow always re-reads DATABASE_URL and preflights it, so the first run after database recovery automatically resumes POSTGRES persistence. A stale or unavailable 4H confirmation forces the 1H Gate to WAIT, but it does not suppress a material 1H change notification.
+BKK PostgreSQL remains the preferred durable persistence layer. If the BKK SSH tunnel or PostgreSQL service is temporarily unavailable, the production monitor workflows explicitly enter degraded persistence mode instead of stopping all computation. Latest successful 1H/4H state is restored from GitHub artifacts, new PIT/state output remains in run artifacts, and an ETH System Health Telegram alert identifies the persistence failure. The recovery watch establishes a baseline without notification, stays silent while availability is unchanged, and sends one RECOVERED Telegram notification only on an unavailable-to-available transition. No recovery flag is stored outside the normal runtime: each production workflow always re-reads DATABASE_URL and preflights it, so the first run after database recovery automatically resumes POSTGRES persistence. A stale or unavailable 4H confirmation forces the 1H Gate to WAIT, but it does not suppress a material 1H change notification.
 
 Shadow forecast research is stricter: creation/settlement requires durable PostgreSQL because unbiased forward evidence, settlement continuity, and model-state traceability must not be reconstructed from partial run artifacts. If PostgreSQL is unavailable, shadow-forecast.yml must succeed in a fail-closed state with status SKIPPED_PERSISTENCE_UNAVAILABLE, create no new forecasts, settle no forecasts, and make no promotion/evidence progress. The next cycle after PostgreSQL recovery resumes normal Shadow processing automatically.
 
