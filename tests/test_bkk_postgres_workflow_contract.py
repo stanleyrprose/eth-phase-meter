@@ -60,3 +60,5 @@ def test_migration_workflow_uses_known_good_backup_and_pg18_restore():
     assert "--network host" in text
     assert 'required: "true"' in text
     assert "required_tables_missing" in text
+    assert "TRUSTED_ADMIN_SSH" in text
+    assert "Provision PostgreSQL 18 on BKK" not in text
