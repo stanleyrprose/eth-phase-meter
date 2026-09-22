@@ -64,6 +64,33 @@ def _settle_due(records: list[dict], pit_records: list[dict]) -> tuple[list[dict
 
 
 def run_shadow_cycle(output_dir: str = "eth_reports/shadow") -> dict:
+    if not os.getenv("DATABASE_URL"):
+        report = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "created": [],
+            "settled_now": 0,
+            "horizons": {
+                horizon: {
+                    "status": "SKIPPED_PERSISTENCE_UNAVAILABLE",
+                    "evidence": {
+                        "available": False,
+                        "reason": "DURABLE_POSTGRES_REQUIRED",
+                    },
+                }
+                for horizon in HORIZONS
+            },
+            "status": "SKIPPED_PERSISTENCE_UNAVAILABLE",
+            "reason": "DURABLE_POSTGRES_REQUIRED",
+            "persistence_mode": "ARTIFACT_ONLY",
+        }
+        root = Path(output_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "shadow_cycle_report.json").write_text(
+            json.dumps(report, indent=2, default=str),
+            encoding="utf-8",
+        )
+        return report
+
     pit_records = load_pit_records(os.getenv("DATABASE_URL"))
     existing = load_shadow_records()
     existing, settled_now = _settle_due(existing, pit_records)
