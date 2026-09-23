@@ -7,7 +7,6 @@ from pathlib import Path
 from statistics import mean, median
 from typing import Any, Iterable
 
-from .dataset import load_pit_records
 from .shadow_forecast import path_outcome
 from .tactical_alerts import DIRECTION_THRESHOLD
 
@@ -255,6 +254,45 @@ def load_tactical_outcomes(dsn: str | None = None) -> list[dict]:
             return [row[0] for row in cur.fetchall()]
 
 
+def load_tactical_price_records(dsn: str | None = None) -> list[dict]:
+    """Load only the compact 1H PIT projection needed for R2 settlement."""
+    dsn = dsn or os.getenv("DATABASE_URL")
+    if not dsn:
+        return []
+
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT "
+                "payload->>'observed_at', "
+                "payload->>'schedule_nominal_time', "
+                "payload#>>'{metric_value,price}', "
+                "payload->>'workflow_run_id' "
+                "FROM eth_monitor_records "
+                "WHERE record_type='pit_snapshot' "
+                "AND payload#>>'{metric_value,timeframe}'='1h' "
+                "ORDER BY created_at"
+            )
+            rows = cur.fetchall()
+
+    records: list[dict] = []
+    for observed_at, nominal_time, price, workflow_run_id in rows:
+        parsed_price = _as_float(price)
+        if not observed_at or parsed_price is None or parsed_price <= 0:
+            continue
+        records.append(
+            {
+                "observed_at": str(observed_at),
+                "schedule_nominal_time": str(nominal_time) if nominal_time else None,
+                "metric_value": {"timeframe": "1h", "price": parsed_price},
+                "workflow_run_id": workflow_run_id,
+            }
+        )
+    return records
+
+
 def _canonical_1h_prices(pit_records: Iterable[dict]) -> dict[datetime, dict]:
     buckets: dict[datetime, dict] = {}
     for record in pit_records:
@@ -499,7 +537,7 @@ def run_tactical_outcome_cycle(
         (str(outcome.get("event_id")), int(outcome.get("horizon_hours") or 0))
         for outcome in existing_outcomes
     }
-    pit_records = load_pit_records(dsn)
+    pit_records = load_tactical_price_records(dsn)
     due = build_due_outcomes(events, pit_records, existing_keys=existing_keys)
     settled_now = persist_tactical_outcomes(due, dsn)
     all_outcomes = load_tactical_outcomes(dsn)
