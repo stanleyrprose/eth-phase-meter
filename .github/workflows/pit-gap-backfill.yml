@@ -1,0 +1,68 @@
+name: PIT Gap Backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Insert validated missing PIT rows. Leave false for audit-only dry run."
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pit-gap-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup required BKK PostgreSQL tunnel
+        uses: ./.github/actions/setup-bkk-postgres
+        with:
+          ssh-key: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
+          required: "true"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install locked CI dependencies
+        run: pip install -r requirements-ci.lock
+
+      - name: Audit closed PIT gap
+        if: inputs.apply != true
+        run: >-
+          python -m scripts.backfill_pit_gap
+          --start "2026-09-21T06:24:30.823993Z"
+          --end "2026-09-22T23:58:23.190352Z"
+          --report eth_reports/governance/pit_gap_backfill.json
+
+      - name: Apply validated PIT gap backfill
+        if: inputs.apply == true
+        run: >-
+          python -m scripts.backfill_pit_gap
+          --start "2026-09-21T06:24:30.823993Z"
+          --end "2026-09-22T23:58:23.190352Z"
+          --apply
+          --report eth_reports/governance/pit_gap_backfill.json
+
+      - name: Upload PIT gap evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-gap-backfill-${{ github.run_id }}
+          path: eth_reports/governance/pit_gap_backfill.json
+          if-no-files-found: error
+          retention-days: 90
