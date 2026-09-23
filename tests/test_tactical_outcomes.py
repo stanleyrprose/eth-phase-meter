@@ -4,6 +4,7 @@ from eth_trend_v3.tactical_outcomes import (
     EVENT_VERSION,
     build_due_outcomes,
     build_tactical_event,
+    load_tactical_price_records,
     tactical_cohorts,
     tactical_outcome_report,
 )
@@ -160,3 +161,71 @@ def test_report_is_descriptive_and_exposes_requested_cohort():
     assert cohort["n"] == 1
     assert cohort["mean_forward_return"] == -0.02
     assert cohort["mean_signal_aligned_return"] == 0.02
+
+
+def test_compact_price_loader_projects_only_settlement_fields(monkeypatch):
+    captured = {}
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, query):
+            captured["query"] = query
+
+        def fetchall(self):
+            return [
+                (
+                    "2026-09-23T06:18:00+00:00",
+                    "2026-09-23T06:15:00+00:00",
+                    "2712.5",
+                    "123",
+                )
+            ]
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+    class Psycopg:
+        @staticmethod
+        def connect(dsn):
+            captured["dsn"] = dsn
+            return Connection()
+
+    import sys
+    monkeypatch.setitem(sys.modules, "psycopg", Psycopg)
+
+    rows = load_tactical_price_records("postgresql://test")
+
+    assert rows == [
+        {
+            "observed_at": "2026-09-23T06:18:00+00:00",
+            "schedule_nominal_time": "2026-09-23T06:15:00+00:00",
+            "metric_value": {"timeframe": "1h", "price": 2712.5},
+            "workflow_run_id": "123",
+        }
+    ]
+    query = captured["query"]
+    assert "raw_payload" not in query
+    assert "payload FROM eth_monitor_records" not in query
+    assert "payload#>>'{metric_value,timeframe}'='1h'" in query
+    assert "payload#>>'{metric_value,price}'" in query
+
+
+def test_r2_runtime_does_not_use_generic_full_pit_loader():
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "eth_trend_v3" / "tactical_outcomes.py").read_text(
+        encoding="utf-8"
+    )
+    assert "load_pit_records(" not in text
