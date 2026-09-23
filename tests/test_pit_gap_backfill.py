@@ -12,6 +12,7 @@ from scripts.backfill_pit_gap import (
     canonical_digest,
     extract_pit_payloads,
     identity_for,
+    observed_at_in_gap,
     plan_candidates,
     validate_candidate,
 )
@@ -125,3 +126,18 @@ def test_plan_deduplicates_same_candidate_inside_artifacts():
     assert len(insertable) == 1
     assert existing == []
     assert len(duplicates) == 1
+
+
+def test_identity_accepts_numeric_string_run_id():
+    value = payload(run_id="123")
+    assert identity_for(value)[0] == "123"
+
+
+def test_gap_boundaries_are_ignored_not_validated():
+    at_start = payload(observed="2026-09-21T06:24:30.823993Z")
+    at_end = payload(observed="2026-09-22T23:58:23.190352Z")
+    inside = payload(observed="2026-09-22T23:58:23.000000Z")
+
+    assert observed_at_in_gap(at_start, start=START, end=END) is None
+    assert observed_at_in_gap(at_end, start=START, end=END) is None
+    assert observed_at_in_gap(inside, start=START, end=END) is not None

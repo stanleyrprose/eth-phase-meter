@@ -44,18 +44,34 @@ def canonical_digest(payload: dict[str, Any]) -> str:
     return sha256(body).hexdigest()
 
 
+def observed_at_in_gap(
+    payload: dict[str, Any],
+    *,
+    start: datetime,
+    end: datetime,
+) -> datetime | None:
+    value = payload.get("observed_at")
+    if not value:
+        raise ValueError("observed_at is required")
+    observed = parse_utc(str(value))
+    return observed if start < observed < end else None
+
+
 def identity_for(payload: dict[str, Any]) -> tuple[str, str, str]:
     run_id = payload.get("workflow_run_id")
     timeframe = (payload.get("metric_value") or {}).get("timeframe")
     observed_at = payload.get("observed_at")
-    if not isinstance(run_id, int):
-        raise ValueError("workflow_run_id must be an integer")
+    if isinstance(run_id, bool) or not (
+        isinstance(run_id, int)
+        or (isinstance(run_id, str) and run_id.isdigit())
+    ):
+        raise ValueError("workflow_run_id must be an integer or numeric string")
     if timeframe not in {"1h", "4h"}:
         raise ValueError("metric_value.timeframe must be 1h or 4h")
     if not observed_at:
         raise ValueError("observed_at is required")
     normalized = parse_utc(str(observed_at)).isoformat()
-    return str(run_id), str(timeframe), normalized
+    return str(int(run_id)), str(timeframe), normalized
 
 
 @dataclass(frozen=True)
@@ -199,6 +215,7 @@ def collect_candidates(
         "successful_runs": 0,
         "artifacts_examined": 0,
         "pit_files_examined": 0,
+        "pit_files_outside_window": 0,
     }
 
     for workflow, prefix in WORKFLOWS.items():
@@ -237,6 +254,10 @@ def collect_candidates(
                 for artifact_path, payload in extract_pit_payloads(download.content):
                     counters["pit_files_examined"] += 1
                     try:
+                        observed = observed_at_in_gap(payload, start=start, end=end)
+                        if observed is None:
+                            counters["pit_files_outside_window"] += 1
+                            continue
                         timeframe, raw_hash, observed = validate_candidate(
                             payload=payload,
                             run_id=run_id,
