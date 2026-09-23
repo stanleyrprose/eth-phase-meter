@@ -10,7 +10,6 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
     steps:
       - uses: actions/checkout@v5
       - name: Setup BKK PostgreSQL tunnel
