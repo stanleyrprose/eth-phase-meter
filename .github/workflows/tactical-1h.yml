@@ -58,6 +58,8 @@ jobs:
         run: |
           printf '%s=\n' 'DATABASE_URL' >> "${GITHUB_ENV}"
           echo "ETH_PERSISTENCE_DEGRADED=1" >> "${GITHUB_ENV}"
+      - name: Apply versioned migrations
+        run: python -m scripts.apply_migrations
       - name: Validate tactical runtime
         shell: bash
         run: |

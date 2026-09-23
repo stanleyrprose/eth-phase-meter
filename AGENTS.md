@@ -444,6 +444,47 @@ Preserve:
 
 Never retroactively edit a shadow forecast after observing the outcome except through an auditable correction path.
 
+## 18A. R2 Tactical Outcome Evaluation
+
+R2 is a research-only forward-outcome layer for 1H tactical observations. It must not modify the production tactical thresholds, notification policy, gate logic, model promotion state, or trading behavior.
+
+Persist tactical research in two append-only layers:
+
+- `eth_tactical_events`: immutable event snapshot frozen at the 1H observation time;
+- `eth_tactical_outcomes`: later settlement rows keyed by event and horizon.
+
+R2 horizons are exactly:
+
+```text
++1H
++4H
++12H
++24H
+```
+
+Required cohorts include:
+
+- `WEAK_BEAR+WAIT`
+- `WEAK_BEAR+PASS`
+- `WEAK_BULL+PASS`
+- `WAIT→PASS`
+- `GATE_BLOCKED` vs `GATE_PASS`
+- ±20 direction crossings
+- `DIRECTION_STRENGTHENING`
+- `DIRECTION_WEAKENING`
+- `DIRECTION_REVERSAL`
+
+Rules:
+
+- only observations inside the 15-minute sampling SLA are eligible for the canonical R2 event stream;
+- a deterministic event id permits at most one R2 event per nominal 1H bucket/version;
+- settlement uses exact future 1H nominal PIT buckets, never data observed after the target horizon;
+- degraded events may be stored but are excluded from the primary descriptive cohort report;
+- missing future PIT leaves an outcome unsettled rather than interpolating or guessing;
+- R2 reports are descriptive evidence only and must not claim causal or predictive value from small samples;
+- R2 never auto-retunes ±20 / Δ15, never auto-promotes a model, and never executes trades;
+- an R2 failure must remain fail-soft relative to the production Strategic/Tactical monitor.
+
 ## 19. Git Rules
 
 Default workflow:

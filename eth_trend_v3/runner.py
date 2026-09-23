@@ -31,6 +31,7 @@ from .production_control import evaluate_runtime_demotion
 from .shadow_forecast import new_shadow_record, persist_shadow
 from .structural_flow import enrich_staking_netflow
 from .tactical_alerts import notification_reasons, render_notification_reasons
+from .tactical_outcomes import safe_run_tactical_outcome_cycle
 from .state_fallback import load_state_record, state_age_hours
 
 OUTPUT = Path(core.OUTPUT_DIR)
@@ -279,6 +280,9 @@ def run_one(timeframe, history_records):
     persisted = persist_json_record("pit_snapshot", record)
     record["quality_flags"]["external_persisted"] = persisted
     pit_path = write_pit_snapshot(OUTPUT, timeframe, record)
+    payload["observed_at"] = record["observed_at"]
+    payload["schedule_nominal_time"] = record["schedule_nominal_time"]
+    payload["pit_snapshot_id"] = pit_path.name
     if timeframe == "4h":
         payload["production_forecast_ids"] = _persist_production_forecasts(payload, pit_snapshot_id=pit_path.name)
 
@@ -367,6 +371,18 @@ def main():
     r4, p4 = run_one("4h", history)
     r1, p1 = run_one("1h", history)
     tactical_decision = _process_tactical_1h(r1, p1, p4, previous_1h)
+    tactical_research = safe_run_tactical_outcome_cycle(
+        p1,
+        previous=previous_1h,
+        confirmation_4h=p4,
+    )
+    print(json.dumps({
+        "tactical_outcomes": {
+            "status": tactical_research.get("status"),
+            "event_record": tactical_research.get("event_record"),
+            "settled_now": tactical_research.get("settled_now"),
+        }
+    }, ensure_ascii=False, default=str))
 
     persist_json_record("monitor_state_1h", p1)
     (OUTPUT / "v3_snapshot_1h.json").write_text(
