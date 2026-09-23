@@ -76,10 +76,11 @@ def test_missing_target_pit_degrades_without_claiming_blocked_integrity():
         pit("2026-09-23T08:15:00+00:00"),
     ]
 
-    report = assess_r2_readiness(events, [], pits, now=NOW)
+    report = assess_r2_readiness(events, [outcome("e2", 1)], pits, now=NOW)
 
     assert report["operational_status"] == "DEGRADED"
     assert report["horizons"]["1"]["missing_target_pit"] == 1
+    assert report["horizons"]["1"]["settlement_lag"] == 0
 
 
 def test_existing_target_without_outcome_blocks_as_settlement_lag():
