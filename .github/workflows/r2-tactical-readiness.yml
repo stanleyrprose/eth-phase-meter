@@ -1,0 +1,64 @@
+name: R2 Tactical Research Readiness
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "40 2 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r2-tactical-research-readiness
+  cancel-in-progress: true
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup BKK PostgreSQL tunnel
+        uses: ./.github/actions/setup-bkk-postgres
+        with:
+          ssh-key: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install locked CI dependencies
+        run: pip install -r requirements-ci.lock
+
+      - name: Build R2 readiness snapshot
+        id: readiness
+        run: >-
+          python -m scripts.r2_research_readiness
+          --send-telegram
+          --report eth_reports/r2-readiness/r2_research_readiness.json
+
+      - name: Write workflow summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## R2 Tactical Research Readiness" >> "${GITHUB_STEP_SUMMARY}"
+          echo >> "${GITHUB_STEP_SUMMARY}"
+          echo "- operational: ${{ steps.readiness.outputs.operational_status }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- research: ${{ steps.readiness.outputs.research_status }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- events: ${{ steps.readiness.outputs.event_count }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- outcomes: ${{ steps.readiness.outputs.outcome_count }}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload R2 readiness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2-readiness-${{ github.run_id }}
+          path: eth_reports/r2-readiness/r2_research_readiness.json
+          if-no-files-found: error
+          retention-days: 90
