@@ -485,6 +485,14 @@ Rules:
 - R2 never auto-retunes ±20 / Δ15, never auto-promotes a model, and never executes trades;
 - an R2 failure must remain fail-soft relative to the production Strategic/Tactical monitor.
 
+R2 readiness monitoring is operational observability, not a statistical gate:
+
+- run daily after a normal 1H sampling bucket;
+- report event/outcome counts, due-vs-settled completeness by +1H/+4H/+12H/+24H, requested cohort counts, duplicate identities, settlement lag, missing target PIT, and incomplete paths;
+- use `operational_status` for runtime/data integrity (`HEALTHY`, `DEGRADED`, `BLOCKED`);
+- keep `research_status=ACCUMULATING_EVIDENCE` until a separate human-reviewed research decision defines an evidence threshold;
+- never infer statistical sufficiency from the monitor itself.
+
 ## 19. Git Rules
 
 Default workflow:
