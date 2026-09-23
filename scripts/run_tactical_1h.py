@@ -9,6 +9,7 @@ from eth_trend_v3.dataset import load_pit_records
 from eth_trend_v3.persistence import persist_json_record
 from eth_trend_v3.state_fallback import load_state_record
 from eth_trend_v3.runner import _process_tactical_1h, run_one
+from eth_trend_v3.tactical_outcomes import safe_run_tactical_outcome_cycle
 
 
 OUTPUT = Path(core.OUTPUT_DIR)
@@ -28,6 +29,18 @@ def main():
     }
     payload["persistence_degraded"] = os.getenv("ETH_PERSISTENCE_DEGRADED") == "1"
     decision = _process_tactical_1h(result, payload, primary_4h, previous)
+    tactical_research = safe_run_tactical_outcome_cycle(
+        payload,
+        previous=previous,
+        confirmation_4h=primary_4h,
+    )
+    print(json.dumps({
+        "tactical_outcomes": {
+            "status": tactical_research.get("status"),
+            "event_record": tactical_research.get("event_record"),
+            "settled_now": tactical_research.get("settled_now"),
+        }
+    }, ensure_ascii=False, default=str))
 
     persist_json_record("monitor_state_1h", payload)
     OUTPUT.mkdir(parents=True, exist_ok=True)
