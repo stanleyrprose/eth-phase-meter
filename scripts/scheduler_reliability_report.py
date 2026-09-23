@@ -77,6 +77,7 @@ def evaluate_coverage(
     expected = _expected_buckets(now, window_hours)
     missing: list[str] = []
     duplicates: list[str] = []
+    out_of_band_success_buckets: list[str] = []
     delays: list[float] = []
     covered = 0
     strategic_expected = 0
@@ -95,14 +96,39 @@ def evaluate_coverage(
             continue
 
         covered += 1
-        if len(runs) > 1:
-            duplicates.append(nominal.isoformat())
-        first_created = min(
+        created_times = [
             _parse_utc(run.get("created_at") or run.get("run_started_at"))
             for run in runs
-        )
-        if first_created is not None:
-            delays.append(max(0.0, (first_created - nominal).total_seconds() / 60.0))
+        ]
+        created_times = [created for created in created_times if created is not None]
+        if not created_times:
+            missing.append(nominal.isoformat())
+            covered -= 1
+            continue
+
+        run_delays = [
+            max(0.0, (created - nominal).total_seconds() / 60.0)
+            for created in created_times
+        ]
+        on_time = [delay for delay in run_delays if delay <= max_p95_delay_minutes]
+        if len(on_time) > 1:
+            duplicates.append(nominal.isoformat())
+        if any(delay > max_p95_delay_minutes for delay in run_delays):
+            out_of_band_success_buckets.append(nominal.isoformat())
+
+        delays.append(min(run_delays))
+
+    expected_set = set(expected)
+    strategic_failed_attempts = sum(
+        len(runs) for nominal, runs in strategic_failures.items() if nominal in expected_set
+    )
+    tactical_failed_attempts = sum(
+        len(runs) for nominal, runs in tactical_failures.items() if nominal in expected_set
+    )
+    redundant_success_attempts = 0
+    for nominal in expected:
+        runs = strategic_success.get(nominal, []) if nominal.hour % 4 == 0 else tactical_success.get(nominal, [])
+        redundant_success_attempts += max(0, len(runs) - 1)
 
     coverage_pct = round(100.0 * covered / len(expected), 2) if expected else 100.0
     p95_delay = _p95(delays)
@@ -124,10 +150,14 @@ def evaluate_coverage(
         "missing_buckets": missing,
         "duplicate_count": len(duplicates),
         "duplicate_buckets": duplicates,
+        "duplicate_semantics": "multiple successful runs within max_p95_delay_minutes of the nominal bucket",
+        "out_of_band_success_count": len(out_of_band_success_buckets),
+        "out_of_band_success_buckets": sorted(set(out_of_band_success_buckets)),
+        "redundant_success_attempts": redundant_success_attempts,
         "p95_dispatch_delay_minutes": round(p95_delay, 2) if p95_delay is not None else None,
         "max_p95_delay_minutes": max_p95_delay_minutes,
-        "strategic_failed_attempts": sum(len(v) for v in strategic_failures.values()),
-        "tactical_failed_attempts": sum(len(v) for v in tactical_failures.values()),
+        "strategic_failed_attempts": strategic_failed_attempts,
+        "tactical_failed_attempts": tactical_failed_attempts,
         "healthy": healthy,
     }
 
