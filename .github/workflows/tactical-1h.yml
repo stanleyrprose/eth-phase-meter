@@ -107,6 +107,28 @@ jobs:
           echo "BINANCE_PROXY_URL=socks5h://127.0.0.1:19080" >> "$GITHUB_ENV"
       - name: Run 1H tactical monitor
         run: python -m scripts.run_tactical_1h
+
+      - name: Run daily R2 readiness on the 02 UTC tactical cycle
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          created_at="$(curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            | python -c 'import json,sys; print(json.load(sys.stdin)["created_at"])')"
+          dispatch_hour="$(date -u -d "${created_at}" +%H)"
+
+          if [[ "${dispatch_hour}" != "02" ]]; then
+            echo "Skipping daily R2 readiness; dispatch hour was ${dispatch_hour} UTC."
+            exit 0
+          fi
+
+          python -m scripts.r2_research_readiness \
+            --send-telegram \
+            --report eth_reports/r2-readiness/r2_research_readiness.json
+
       - name: Upload tactical artifacts
         if: always()
         uses: actions/upload-artifact@v4
