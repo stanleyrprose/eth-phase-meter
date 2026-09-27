@@ -15,6 +15,7 @@ def _monitor():
     timestamp = now.strftime("%Y-%m-%d %H:%M UTC")
     base = {
         "timestamp": timestamp,
+        "price": 2700.0,
         "coverage": 98,
         "data_health": {"status": "NORMAL"},
         "model_health": {"status": "NORMAL"},
@@ -96,6 +97,7 @@ def test_local_pipeline_reuses_fresh_decision_when_phase_is_stable(tmp_path):
         "trigger_evaluated",
         "meta_decision_completed",
         "notification_completed",
+        "meta_research_dispatch_completed",
         "state_written",
         "pipeline_completed",
     ]
@@ -187,6 +189,98 @@ def test_no_new_monitor_run_progress_path_without_github_calls(monkeypatch, tmp_
     ]
     assert progress[-1]["status"] == "NO_NEW_MONITOR_RUN"
 
+
+
+def test_no_new_monitor_retries_failed_meta_research_dispatch(monkeypatch, tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monitor = _monitor()
+    now = dt.datetime.now(dt.timezone.utc)
+    meta = {
+        "contract_version": "eth-meta-decision-v1",
+        "generated_at": now.isoformat(),
+        "recommendation": "HOLD",
+        "evidence_alignment": "MEDIUM",
+        "reason_codes": ["CONSTRUCTIVE_BUT_UNCONFIRMED"],
+        "sources": {
+            "tradingagents": {"decision": "HOLD", "fresh": True},
+            "phase_meter": {
+                "fresh": True,
+                "1h": {
+                    "direction": 1.0,
+                    "coverage": 98.0,
+                    "regime": "Transition",
+                },
+                "4h": {
+                    "direction": 22.0,
+                    "coverage": 98.0,
+                    "regime": "Transition",
+                    "momentum": 55.0,
+                    "order_flow": 59.0,
+                    "options_positioning": -21.0,
+                    "volatility_risk": 25.0,
+                },
+            },
+        },
+        "pipeline": {
+            "monitor_run_id": 456,
+            "notification": {
+                "status": "SKIPPED_UNCONFIGURED",
+                "policy_action": "SEND_UNCHANGED",
+                "change_type": "UNCHANGED",
+                "previous_recommendation": "HOLD",
+                "current_recommendation": "HOLD",
+            },
+        },
+    }
+    (state_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "last_processed_run_id": 456,
+                "last_monitor_git_sha": "test-sha",
+                "last_meta_research_dispatch": {"status": "FAILED"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (state_dir / "latest_monitor.json").write_text(json.dumps(monitor), encoding="utf-8")
+    (state_dir / "meta_decision.json").write_text(json.dumps(meta), encoding="utf-8")
+    monkeypatch.setattr(
+        pipeline,
+        "_latest_monitor_run",
+        lambda _gh, _repo, _workflow: {
+            "databaseId": 456,
+            "headSha": "test-sha",
+            "createdAt": "2026-01-02T00:00:00Z",
+        },
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        pipeline,
+        "_dispatch_meta_action_event",
+        lambda gh, repo, event: dispatched.append((gh, repo, event))
+        or {"status": "DISPATCHED", "event_id": event["event_id"]},
+    )
+
+    result = pipeline.main(
+        [
+            "--state-dir",
+            str(state_dir),
+            "--gh",
+            "fake-gh",
+            "--watchdog-seconds",
+            "0",
+        ]
+    )
+
+    assert result == 0
+    assert len(dispatched) == 1
+    assert dispatched[0][2]["monitor_run_id"] == 456
+    state = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["last_meta_research_dispatch_run_id"] == 456
+    assert state["last_meta_research_dispatch"]["status"] == "DISPATCHED"
+    event = json.loads((state_dir / "meta_action_event.json").read_text(encoding="utf-8"))
+    assert event["notification"]["fallback_requested"] is True
 
 def test_github_artifact_download_completion_precedes_monitor_load(monkeypatch, tmp_path):
     state_dir = tmp_path / "state"
