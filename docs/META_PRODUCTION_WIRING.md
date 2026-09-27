@@ -91,9 +91,13 @@ Dependency installation is skipped when the virtual environment is complete and 
 
 The default smoke checks TradingAgents detect-only readiness, Codex login, and the latest successful GitHub monitor run, then temporarily launches the local pipeline with `--help` under `launchd`. It does **not** run a full TradingAgents graph and does **not** kickstart the production pipeline. Add `--kickstart-production` only when the deployment should explicitly start the installed production LaunchAgent immediately after all checks pass.
 
-## Change-only Telegram notification
+## Per-monitor Action-first Telegram notification
 
-The first Meta recommendation establishes a baseline without sending. Later runs send only when the recommendation differs from the last successfully notified recommendation. Telegram delivery is fail-open: a transient failure leaves the notification baseline unchanged for a later retry while the market-decision pipeline remains successful. If credentials are absent, the run records `SKIPPED_UNCONFIGURED` and advances the baseline so enabling Telegram later does not replay old changes.
+Every newly processed successful 4H monitor artifact produces one Meta Action snapshot, even when the recommendation is unchanged. The pipeline already deduplicates GitHub monitor run IDs, so this makes the current `ADD` / `HOLD` / `REDUCE` / `AVOID` decision visible without creating duplicate notifications for the same source run.
+
+The message is Action-first: recommendation and exposure semantics come first, followed by evidence alignment, TradingAgents, 1H/4H direction and regime, 4H momentum/order-flow/options/volatility, confirmation gaps or blocking reasons, optional Kronos shadow context, and the explicit no-order-execution guardrail. `evidence_alignment` remains descriptive and is not presented as a calibrated confidence or probability.
+
+Telegram delivery remains fail-open: a transient send failure leaves the last successfully notified recommendation unchanged while the market-decision pipeline remains successful. If credentials are absent, the run records `SKIPPED_UNCONFIGURED` and advances the baseline; the next newly processed monitor run will still attempt to send its current Action snapshot after Telegram is configured.
 
 Environment variables `TG_BOT_TOKEN` and `TG_CHAT_ID` take precedence. For launchd, use the default local secret file and restrict it to the owner:
 
