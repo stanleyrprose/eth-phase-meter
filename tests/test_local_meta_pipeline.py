@@ -78,7 +78,8 @@ def test_local_pipeline_reuses_fresh_decision_when_phase_is_stable(tmp_path):
     assert trigger["action"] == "REUSE"
     assert meta["recommendation"] == "HOLD"
     assert meta["pipeline"]["ta_trigger_action"] == "REUSE"
-    assert meta["pipeline"]["notification"]["status"] == "SKIPPED_UNCONFIGURED"\n    assert meta["pipeline"]["notification"]["policy_action"] == "SEND_BASELINE"
+    assert meta["pipeline"]["notification"]["status"] == "SKIPPED_UNCONFIGURED"
+    assert meta["pipeline"]["notification"]["policy_action"] == "SEND_BASELINE"
     state = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
     assert state["last_notified_recommendation"] == "HOLD"
     assert state["last_notification"]["attempted"] is False
@@ -308,7 +309,8 @@ def test_local_pipeline_migrates_same_meta_baseline_without_notification(tmp_pat
     )
     assert completed.returncode == 0, completed.stderr
     state = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
-    assert state["last_notification"]["status"] == "NO_CHANGE"
+    assert state["last_notification"]["status"] == "SKIPPED_UNCONFIGURED"
+    assert state["last_notification"]["policy_action"] == "SEND_UNCHANGED"
     assert state["last_notification"]["previous_recommendation"] == "HOLD"
     assert state["last_notified_recommendation"] == "HOLD"
 
