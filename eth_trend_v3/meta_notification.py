@@ -24,13 +24,106 @@ class CredentialResolution:
     error_code: str | None = None
 
 
+_BUY_DECISIONS = {"BUY", "STRONG BUY", "ADD", "ACCUMULATE"}
+_SELL_DECISIONS = {"SELL", "STRONG SELL", "REDUCE", "EXIT"}
+
+_ACTION_META = {
+    "ADD": ("🟢", "增加现有 ETH directional exposure（不自动下单）"),
+    "HOLD": ("🟡", "保持当前 exposure，不因本次信号调整"),
+    "REDUCE": ("🟠", "降低现有 ETH directional exposure；不等于开空"),
+    "AVOID": ("⛔", "不新增方向性 exposure，等待冲突、数据或风险条件解除"),
+}
+
+_REASON_TEXT = {
+    "TRADINGAGENTS_CONTRACT_INVALID": "TradingAgents contract 无效",
+    "TRADINGAGENTS_DECISION_UNKNOWN": "TradingAgents decision 无法识别",
+    "ASSET_MISMATCH": "资产标的不一致",
+    "TRADINGAGENTS_STALE_OR_TIMESTAMP_INVALID": "TradingAgents 结果过期或时间戳无效",
+    "PHASE_DATA_GATED": "Phase Meter 数据健康/覆盖率未通过",
+    "PHASE_DATA_STALE_OR_TIMESTAMP_INVALID": "Phase Meter 数据过期或时间戳无效",
+    "EXTREME_VOLATILITY_RISK": "波动风险过高",
+    "1H_4H_STRONG_CONFLICT": "1H 与 4H 出现强方向冲突",
+    "CROSS_SYSTEM_CONFLICT": "TradingAgents 与 Phase Meter 出现强方向冲突",
+    "CONSTRUCTIVE_BUT_UNCONFIRMED": "偏正但确认不足",
+    "BEARISH_BUT_UNCONFIRMED": "偏空但确认不足",
+    "BUY_SIGNAL_LACKS_MULTI_TIMEFRAME_CONFIRMATION": "TradingAgents 看多，但多周期确认不足",
+    "SELL_SIGNAL_LACKS_MULTI_TIMEFRAME_CONFIRMATION": "TradingAgents 看空，但多周期确认不足",
+    "NO_CROSS_SYSTEM_EDGE": "跨系统尚无明确方向优势",
+}
+
+
+def _number(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _score(value) -> str:
+    number = _number(value)
+    if number is None:
+        return "UNKNOWN"
+    return f"{number:+.0f}" if number.is_integer() else f"{number:+.1f}"
+
+
+def _plain(value) -> str:
+    number = _number(value)
+    if number is None:
+        return "UNKNOWN"
+    return f"{number:.0f}" if number.is_integer() else f"{number:.1f}"
+
+
+def _transition_text(current: str, previous: str | None, change_type: str) -> str:
+    if change_type == "BASELINE":
+        return f"BASELINE ({current})"
+    if change_type == "UNCHANGED":
+        return f"UNCHANGED ({current})"
+    return f"{previous or 'UNKNOWN'} → {current}"
+
+
+def _hold_confirmation_lines(
+    ta_decision: str,
+    one_hour: Mapping,
+    four_hour: Mapping,
+) -> list[str]:
+    d1 = _number(one_hour.get("direction"))
+    d4 = _number(four_hour.get("direction"))
+    momentum = _number(four_hour.get("momentum"))
+    order_flow = _number(four_hour.get("order_flow"))
+    options = _number(four_hour.get("options_positioning"))
+
+    missing: list[str] = []
+    if ta_decision in _BUY_DECISIONS:
+        if d4 is None or d4 < 25:
+            missing.append(f"ADD 缺失：4H direction {_score(d4)} < +25")
+        if d1 is None or d1 < 15:
+            missing.append(f"ADD 缺失：1H direction {_score(d1)} < +15")
+        if momentum is None or momentum < 20:
+            missing.append(f"ADD 缺失：Momentum {_score(momentum)} < +20")
+        if order_flow is None or order_flow <= 0:
+            missing.append(f"ADD 缺失：Order Flow {_score(order_flow)} <= 0")
+        if options is None or options < -25:
+            missing.append(f"ADD 缺失：Options {_score(options)} < -25")
+    elif ta_decision in _SELL_DECISIONS:
+        if d4 is None or d4 > -20:
+            missing.append(f"REDUCE 缺失：4H direction {_score(d4)} > -20")
+        if d1 is None or d1 > -10:
+            missing.append(f"REDUCE 缺失：1H direction {_score(d1)} > -10")
+        if (momentum is None or momentum > 0) and (order_flow is None or order_flow > 0):
+            missing.append("REDUCE 缺失：Momentum / Order Flow 尚未恶化到 <= 0")
+    else:
+        missing.append("TradingAgents 尚未给出 BUY/SELL 方向确认")
+
+    return missing or ["尚未达到 ADD/REDUCE 的完整多系统确认条件"]
+
+
 def notification_action(current: str, last_notified: str | None, *, has_baseline: bool) -> str:
-    """Return the change-only policy action without performing I/O."""
+    """Send one action snapshot for every newly processed 4H monitor artifact."""
     if not has_baseline:
-        return "BASELINE"
+        return "SEND_BASELINE"
     if current == last_notified:
-        return "NO_CHANGE"
-    return "SEND"
+        return "SEND_UNCHANGED"
+    return "SEND_CHANGE"
 
 
 def format_meta_notification(meta: Mapping) -> str:
@@ -40,27 +133,76 @@ def format_meta_notification(meta: Mapping) -> str:
     kronos = sources.get("kronos") or {}
     one_hour = phase.get("1h") or {}
     four_hour = phase.get("4h") or {}
-    previous = meta.get("_notification_previous_recommendation") or "UNKNOWN"
-    reasons = ", ".join(str(value) for value in (meta.get("reason_codes") or [])) or "NONE"
-    return "\n".join(
+
+    recommendation = str(meta.get("recommendation") or "UNKNOWN").upper()
+    previous = meta.get("_notification_previous_recommendation")
+    change_type = str(meta.get("_notification_change_type") or "CHANGED")
+    alignment = str(meta.get("evidence_alignment") or "UNKNOWN")
+    reasons = [str(value) for value in (meta.get("reason_codes") or [])]
+    ta_decision = str(tradingagents.get("decision") or "UNKNOWN").upper()
+
+    icon, exposure = _ACTION_META.get(
+        recommendation,
+        ("⚪", "仅作研究观察；当前 action 无法识别"),
+    )
+
+    lines = [
+        "🎯 ETH ACTION [4H]",
+        f"Action: {icon} {recommendation}",
+        f"Exposure: {exposure}",
+        f"证据一致性: {alignment}",
+        f"状态: {_transition_text(recommendation, str(previous) if previous is not None else None, change_type)}",
+        "",
+        "🔎 Key Evidence",
+        f"TradingAgents: {ta_decision}",
+        f"4H: {_score(four_hour.get('direction'))} | {four_hour.get('regime') or 'UNKNOWN'}",
+        f"1H: {_score(one_hour.get('direction'))} | {one_hour.get('regime') or 'UNKNOWN'}",
+        (
+            f"Momentum: {_score(four_hour.get('momentum'))} | "
+            f"Order Flow: {_score(four_hour.get('order_flow'))}"
+        ),
+        (
+            f"Options: {_score(four_hour.get('options_positioning'))} | "
+            f"Vol Risk: {_plain(four_hour.get('volatility_risk'))}"
+        ),
+    ]
+
+    lines.extend(["", "🧩 Decision"])
+    if recommendation == "HOLD":
+        lines.extend(f"• {item}" for item in _hold_confirmation_lines(ta_decision, one_hour, four_hour))
+    elif recommendation == "ADD":
+        lines.append("• TradingAgents + 4H + 1H + momentum + order flow + options 已满足 ADD 确认")
+    elif recommendation == "REDUCE":
+        lines.append("• TradingAgents + 4H + 1H + momentum/order flow 已满足 REDUCE 确认")
+    elif recommendation == "AVOID":
+        blocking = reasons or ["UNKNOWN_BLOCK"]
+        lines.extend(f"• 阻断：{_REASON_TEXT.get(code, code)}" for code in blocking)
+
+    if reasons:
+        lines.append(f"Reason codes: {', '.join(reasons)}")
+
+    kronos_bias = kronos.get("bias")
+    kronos_alignment = kronos.get("shadow_alignment")
+    if kronos_bias or kronos_alignment:
+        lines.extend(
+            [
+                "",
+                (
+                    "Kronos Shadow: "
+                    f"{kronos_bias or 'UNAVAILABLE'} / "
+                    f"{kronos_alignment or 'UNAVAILABLE'}"
+                ),
+            ]
+        )
+
+    lines.extend(
         [
-            f"ETH Meta 变化：{previous} → {meta.get('recommendation') or 'UNKNOWN'}",
-            f"证据一致性：{meta.get('evidence_alignment') or 'UNKNOWN'}",
-            f"原因：{reasons}",
-            f"TradingAgents：{tradingagents.get('decision') or 'UNKNOWN'}",
-            (
-                "Phase："
-                f"1h {one_hour.get('direction', 'UNKNOWN')} / {one_hour.get('regime') or 'UNKNOWN'}；"
-                f"4h {four_hour.get('direction', 'UNKNOWN')} / {four_hour.get('regime') or 'UNKNOWN'}"
-            ),
-            (
-                "Kronos Shadow："
-                f"{kronos.get('bias') or 'UNAVAILABLE'} / "
-                f"{kronos.get('shadow_alignment') or 'UNAVAILABLE'}"
-            ),
-            f"生成时间：{meta.get('generated_at') or 'UNKNOWN'}",
+            "",
+            f"生成时间: {meta.get('generated_at') or 'UNKNOWN'}",
+            "仅作研究型决策支持；不会自动下单，也不会改变 production forecast/model state。",
         ]
     )
+    return "\n".join(lines)
 
 
 def resolve_telegram_credentials(
@@ -135,30 +277,31 @@ def process_meta_notification(
     environ: Mapping[str, str] | None = None,
     sender: Callable[[TelegramCredentials, str], None] = send_telegram_message,
 ) -> tuple[dict, str | None]:
-    """Evaluate and perform notification, returning status and the new durable baseline."""
+    """Send the current Action-first snapshot once per newly processed monitor run."""
     current = str(meta.get("recommendation") or "UNKNOWN")
-    if "last_notified_recommendation" in state:
-        previous_value = state.get("last_notified_recommendation")
-        has_baseline = True
-    elif "last_meta_recommendation" in state:
+
+    previous_value = state.get("last_notified_recommendation")
+    if previous_value is None:
         previous_value = state.get("last_meta_recommendation")
-        has_baseline = True
-    else:
-        previous_value = None
-        has_baseline = False
+    has_baseline = previous_value is not None
     previous = str(previous_value) if previous_value is not None else None
-    action = notification_action(current, previous, has_baseline=has_baseline)
+
+    policy_action = notification_action(current, previous, has_baseline=has_baseline)
+    change_type = (
+        "BASELINE"
+        if not has_baseline
+        else "UNCHANGED"
+        if current == previous
+        else "CHANGED"
+    )
     status = {
-        "status": action,
+        "status": policy_action,
+        "policy_action": policy_action,
+        "change_type": change_type,
         "attempted": False,
         "previous_recommendation": previous,
         "current_recommendation": current,
     }
-    if action == "BASELINE":
-        status["status"] = "BASELINE_INITIALIZED"
-        return status, current
-    if action == "NO_CHANGE":
-        return status, previous
 
     resolution = resolve_telegram_credentials(secret_file, environ=environ)
     if resolution.status == "UNCONFIGURED":
@@ -173,6 +316,7 @@ def process_meta_notification(
     status["credential_source"] = resolution.credentials.source
     message_meta = dict(meta)
     message_meta["_notification_previous_recommendation"] = previous
+    message_meta["_notification_change_type"] = change_type
     try:
         sender(resolution.credentials, format_meta_notification(message_meta))
     except Exception as exc:

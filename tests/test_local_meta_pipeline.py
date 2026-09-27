@@ -78,7 +78,7 @@ def test_local_pipeline_reuses_fresh_decision_when_phase_is_stable(tmp_path):
     assert trigger["action"] == "REUSE"
     assert meta["recommendation"] == "HOLD"
     assert meta["pipeline"]["ta_trigger_action"] == "REUSE"
-    assert meta["pipeline"]["notification"]["status"] == "BASELINE_INITIALIZED"
+    assert meta["pipeline"]["notification"]["status"] == "SKIPPED_UNCONFIGURED"\n    assert meta["pipeline"]["notification"]["policy_action"] == "SEND_BASELINE"
     state = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
     assert state["last_notified_recommendation"] == "HOLD"
     assert state["last_notification"]["attempted"] is False

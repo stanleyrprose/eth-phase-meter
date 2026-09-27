@@ -19,7 +19,14 @@ def _meta(recommendation="HOLD"):
             "tradingagents": {"decision": "HOLD"},
             "phase_meter": {
                 "1h": {"direction": 12.0, "regime": "Range"},
-                "4h": {"direction": 22.0, "regime": "Transition"},
+                "4h": {
+                    "direction": 22.0,
+                    "regime": "Transition",
+                    "momentum": 18.0,
+                    "order_flow": 4.0,
+                    "options_positioning": -10.0,
+                    "volatility_risk": 25.0,
+                },
             },
         },
     }
@@ -29,7 +36,7 @@ def _configured_env():
     return {"TG_BOT_TOKEN": "test-token", "TG_CHAT_ID": "test-chat"}
 
 
-def test_first_baseline_does_not_notify(tmp_path):
+def test_first_baseline_sends_action_snapshot(tmp_path):
     calls = []
     status, baseline = process_meta_notification(
         _meta(),
@@ -38,13 +45,18 @@ def test_first_baseline_does_not_notify(tmp_path):
         environ=_configured_env(),
         sender=lambda credentials, message: calls.append((credentials, message)),
     )
-    assert status["status"] == "BASELINE_INITIALIZED"
-    assert status["attempted"] is False
+    assert status["status"] == "SENT"
+    assert status["policy_action"] == "SEND_BASELINE"
+    assert status["change_type"] == "BASELINE"
+    assert status["attempted"] is True
     assert baseline == "HOLD"
-    assert calls == []
+    assert len(calls) == 1
+    assert "🎯 ETH ACTION [4H]" in calls[0][1]
+    assert "Action: 🟡 HOLD" in calls[0][1]
+    assert "BASELINE (HOLD)" in calls[0][1]
 
 
-def test_no_change_does_not_notify(tmp_path):
+def test_no_change_still_sends_current_action_snapshot(tmp_path):
     calls = []
     status, baseline = process_meta_notification(
         _meta(),
@@ -53,12 +65,16 @@ def test_no_change_does_not_notify(tmp_path):
         environ=_configured_env(),
         sender=lambda credentials, message: calls.append((credentials, message)),
     )
-    assert status["status"] == "NO_CHANGE"
+    assert status["status"] == "SENT"
+    assert status["policy_action"] == "SEND_UNCHANGED"
+    assert status["change_type"] == "UNCHANGED"
     assert baseline == "HOLD"
-    assert calls == []
+    assert len(calls) == 1
+    assert "UNCHANGED (HOLD)" in calls[0][1]
+    assert "TradingAgents 尚未给出 BUY/SELL 方向确认" in calls[0][1]
 
 
-def test_legacy_meta_baseline_same_value_does_not_notify(tmp_path):
+def test_legacy_meta_baseline_same_value_sends_snapshot(tmp_path):
     calls = []
     status, baseline = process_meta_notification(
         _meta(),
@@ -67,10 +83,11 @@ def test_legacy_meta_baseline_same_value_does_not_notify(tmp_path):
         environ=_configured_env(),
         sender=lambda credentials, message: calls.append((credentials, message)),
     )
-    assert status["status"] == "NO_CHANGE"
+    assert status["status"] == "SENT"
+    assert status["policy_action"] == "SEND_UNCHANGED"
     assert status["previous_recommendation"] == "HOLD"
     assert baseline == "HOLD"
-    assert calls == []
+    assert len(calls) == 1
 
 
 def test_legacy_meta_baseline_changed_value_notifies(tmp_path):
@@ -83,32 +100,49 @@ def test_legacy_meta_baseline_changed_value_notifies(tmp_path):
         sender=lambda credentials, message: calls.append((credentials, message)),
     )
     assert status["status"] == "SENT"
+    assert status["policy_action"] == "SEND_CHANGE"
     assert status["previous_recommendation"] == "HOLD"
     assert baseline == "REDUCE"
     assert len(calls) == 1
     assert "HOLD → REDUCE" in calls[0][1]
 
 
-def test_change_success_advances_last_notified_and_formats_evidence(tmp_path):
+def test_change_success_advances_last_notified_and_formats_action_first_evidence(tmp_path):
     calls = []
+    meta = _meta("ADD")
+    meta["sources"]["tradingagents"]["decision"] = "BUY"
     status, baseline = process_meta_notification(
-        _meta("ADD"),
+        meta,
         {"last_notified_recommendation": "HOLD"},
         secret_file=tmp_path / "missing.json",
         environ=_configured_env(),
         sender=lambda credentials, message: calls.append((credentials, message)),
     )
     assert status["status"] == "SENT"
+    assert status["policy_action"] == "SEND_CHANGE"
     assert status["credential_source"] == "environment"
     assert baseline == "ADD"
     assert len(calls) == 1
-    assert "HOLD → ADD" in calls[0][1]
-    assert "MEDIUM" in calls[0][1]
-    assert "CONSTRUCTIVE_BUT_UNCONFIRMED" in calls[0][1]
-    assert "TradingAgents：HOLD" in calls[0][1]
-    assert "1h 12.0 / Range" in calls[0][1]
-    assert "4h 22.0 / Transition" in calls[0][1]
-    assert "2026-09-13T00:00:00+00:00" in calls[0][1]
+    message = calls[0][1]
+    assert message.startswith("🎯 ETH ACTION [4H]\nAction: 🟢 ADD")
+    assert "Exposure: 增加现有 ETH directional exposure（不自动下单）" in message
+    assert "状态: HOLD → ADD" in message
+    assert "证据一致性: MEDIUM" in message
+    assert "TradingAgents: BUY" in message
+    assert "1H: +12 | Range" in message
+    assert "4H: +22 | Transition" in message
+    assert "Reason codes: CONSTRUCTIVE_BUT_UNCONFIRMED" in message
+    assert "2026-09-13T00:00:00+00:00" in message
+    assert "不会自动下单" in message
+
+
+def test_hold_with_bullish_ta_shows_missing_confirmation():
+    meta = _meta("HOLD")
+    meta["sources"]["tradingagents"]["decision"] = "BUY"
+    message = format_meta_notification(meta)
+    assert "ADD 缺失：4H direction +22 < +25" in message
+    assert "ADD 缺失：1H direction +12 < +15" in message
+    assert "ADD 缺失：Momentum +18 < +20" in message
 
 
 def test_change_failure_keeps_baseline_and_later_call_retries(tmp_path):
@@ -151,6 +185,7 @@ def test_unconfigured_change_skips_and_syncs_baseline(tmp_path):
         sender=lambda credentials, message: (_ for _ in ()).throw(AssertionError("must not send")),
     )
     assert status["status"] == "SKIPPED_UNCONFIGURED"
+    assert status["policy_action"] == "SEND_CHANGE"
     assert status["attempted"] is False
     assert baseline == "AVOID"
 
@@ -226,9 +261,11 @@ def test_formatter_handles_missing_optional_source_fields():
     message = format_meta_notification(
         {
             "_notification_previous_recommendation": "HOLD",
+            "_notification_change_type": "CHANGED",
             "recommendation": "AVOID",
             "reason_codes": [],
         }
     )
-    assert "HOLD → AVOID" in message
-    assert "原因：NONE" in message
+    assert message.startswith("🎯 ETH ACTION [4H]\nAction: ⛔ AVOID")
+    assert "状态: HOLD → AVOID" in message
+    assert "• 阻断：UNKNOWN_BLOCK" in message
