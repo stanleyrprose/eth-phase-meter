@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import datetime as dt
 import faulthandler
@@ -18,6 +19,8 @@ from typing import Iterator
 
 GH_LIST_TIMEOUT_SECONDS = 30
 GH_DOWNLOAD_TIMEOUT_SECONDS = 120
+META_RESEARCH_DISPATCH_TIMEOUT_SECONDS = 30
+META_RESEARCH_WORKFLOW = "meta-action-outcomes.yml"
 TRADINGAGENTS_TIMEOUT_SECONDS = 3600
 KRONOS_TIMEOUT_SECONDS = 1800
 DEFAULT_WATCHDOG_SECONDS = 5400
@@ -218,6 +221,107 @@ def _download_monitor(gh: str, repo: str, run_id: int, destination: Path) -> Pat
     if len(matches) != 1:
         raise RuntimeError(f"MONITOR_ARTIFACT_AMBIGUOUS: count={len(matches)}")
     return matches[0]
+
+
+def _make_meta_action_event(
+    meta: dict,
+    monitor: dict,
+    *,
+    run_id: int | str,
+    run_sha: str | None,
+    notification: dict,
+) -> tuple[dict | None, dict]:
+    from eth_trend_v3.meta_action_outcomes import build_meta_action_event
+
+    return build_meta_action_event(
+        meta,
+        monitor,
+        monitor_run_id=run_id,
+        monitor_git_sha=run_sha,
+        notification=notification,
+    )
+
+
+def _dispatch_meta_action_event(gh: str, repo: str, event: dict) -> dict:
+    encoded = base64.b64encode(
+        json.dumps(event, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+    ).decode("ascii")
+    completed = _run(
+        [
+            gh,
+            "workflow",
+            "run",
+            META_RESEARCH_WORKFLOW,
+            "--repo",
+            repo,
+            "--ref",
+            "main",
+            "-f",
+            f"event_b64={encoded}",
+        ],
+        timeout=META_RESEARCH_DISPATCH_TIMEOUT_SECONDS,
+        timeout_code="META_RESEARCH_DISPATCH_TIMEOUT",
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise RuntimeError(f"META_RESEARCH_DISPATCH_FAILED: {detail[-1000:]}")
+    return {"status": "DISPATCHED", "event_id": event.get("event_id")}
+
+
+def _retry_meta_research_dispatch(
+    *,
+    gh: str,
+    repo: str,
+    state: dict,
+    state_path: Path,
+    meta_path: Path,
+    monitor_path: Path,
+    event_path: Path,
+    run_id: int | str,
+    run_sha: str | None,
+) -> dict | None:
+    if state.get("last_meta_research_dispatch_run_id") == run_id:
+        return None
+
+    event = _read_json(event_path)
+    if str(event.get("monitor_run_id") or "") != str(run_id):
+        meta = _read_json(meta_path)
+        monitor = _read_json(monitor_path)
+        if not meta or not monitor:
+            return None
+        notification = (
+            ((meta.get("pipeline") or {}).get("notification") or {})
+            or (state.get("last_notification") or {})
+        )
+        event, eligibility = _make_meta_action_event(
+            meta,
+            monitor,
+            run_id=run_id,
+            run_sha=run_sha,
+            notification=notification,
+        )
+        if event is None:
+            state["last_meta_research_dispatch"] = eligibility
+            _write_json(state_path, state)
+            return eligibility
+        _write_json(event_path, event)
+
+    try:
+        status = _dispatch_meta_action_event(gh, repo, event)
+    except Exception as exc:
+        status = {
+            "status": "FAILED",
+            "event_id": event.get("event_id"),
+            "error_code": str(exc).split(":", 1)[0] or type(exc).__name__,
+        }
+        state["last_meta_research_dispatch"] = status
+        _write_json(state_path, state)
+        return status
+
+    state["last_meta_research_dispatch_run_id"] = run_id
+    state["last_meta_research_dispatch"] = status
+    _write_json(state_path, state)
+    return status
 
 
 def _monitor_date(monitor: dict) -> str:
@@ -471,6 +575,7 @@ def _execute_pipeline(args: argparse.Namespace, progress: ProgressLogger) -> int
     trigger_path = state_dir / "tradingagents_trigger.json"
     kronos_path = state_dir / "kronos_evidence.json"
     meta_path = state_dir / "meta_decision.json"
+    meta_event_path = state_dir / "meta_action_event.json"
     state = _read_json(state_path)
 
     run_id: int | str
@@ -491,6 +596,23 @@ def _execute_pipeline(args: argparse.Namespace, progress: ProgressLogger) -> int
         run_sha = latest.get("headSha")
         progress.emit("gh_run_list_completed", run_id=run_id)
         if state.get("last_processed_run_id") == run_id:
+            retry = _retry_meta_research_dispatch(
+                gh=gh,
+                repo=args.repo,
+                state=state,
+                state_path=state_path,
+                meta_path=meta_path,
+                monitor_path=previous_monitor_path,
+                event_path=meta_event_path,
+                run_id=run_id,
+                run_sha=run_sha or state.get("last_monitor_git_sha"),
+            )
+            if retry is not None:
+                progress.emit(
+                    "meta_research_dispatch_retry",
+                    status=retry.get("status"),
+                    run_id=run_id,
+                )
             progress.emit("pipeline_completed", status="NO_NEW_MONITOR_RUN", run_id=run_id)
             print(f"NO_NEW_MONITOR_RUN run_id={run_id}")
             return 0
@@ -632,6 +754,38 @@ def _execute_pipeline(args: argparse.Namespace, progress: ProgressLogger) -> int
     )
     meta["pipeline"]["notification"] = notification
     progress.emit("notification_completed", status=notification["status"], run_id=run_id)
+
+    event, event_status = _make_meta_action_event(
+        meta,
+        monitor,
+        run_id=run_id,
+        run_sha=run_sha,
+        notification=notification,
+    )
+    if event is None:
+        research_dispatch = event_status
+    elif args.monitor_file:
+        _write_json(meta_event_path, event)
+        research_dispatch = {
+            "status": "SKIPPED_LOCAL_MONITOR",
+            "event_id": event.get("event_id"),
+        }
+    else:
+        _write_json(meta_event_path, event)
+        try:
+            research_dispatch = _dispatch_meta_action_event(gh, args.repo, event)
+        except Exception as exc:
+            research_dispatch = {
+                "status": "FAILED",
+                "event_id": event.get("event_id"),
+                "error_code": str(exc).split(":", 1)[0] or type(exc).__name__,
+            }
+    meta["pipeline"]["meta_action_research"] = research_dispatch
+    progress.emit(
+        "meta_research_dispatch_completed",
+        status=research_dispatch.get("status"),
+        run_id=run_id,
+    )
     _write_json(meta_path, meta)
     _write_json(previous_monitor_path, monitor)
     state.update(
@@ -642,9 +796,12 @@ def _execute_pipeline(args: argparse.Namespace, progress: ProgressLogger) -> int
             "last_meta_recommendation": meta["recommendation"],
             "last_notified_recommendation": last_notified,
             "last_notification": notification,
+            "last_meta_research_dispatch": research_dispatch,
             "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         }
     )
+    if research_dispatch.get("status") == "DISPATCHED":
+        state["last_meta_research_dispatch_run_id"] = run_id
     _write_json(state_path, state)
     progress.emit("state_written", status="OK", run_id=run_id)
     progress.emit("pipeline_completed", status="OK", run_id=run_id)
