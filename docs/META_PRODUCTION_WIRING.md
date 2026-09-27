@@ -34,6 +34,18 @@ eth_trend_v3.meta_decision
         |
         v
 ~/.eth-meta-pipeline/meta_decision.json
+        |
+        +--> freeze meta-action-v1 event
+        |        |
+        |        +--> gh workflow dispatch
+        |                 |
+        |                 v
+        |          GitHub Actions: ETH Meta Action Outcomes
+        |                 +--> TG fallback via GitHub Secrets when local TG is unavailable
+        |                 +--> BKK PostgreSQL append-only event/outcome research
+        |
+        v
+non-secret runtime status surface
 ```
 
 ## Trigger policy
@@ -66,6 +78,7 @@ Files:
 - `tradingagents_trigger.json`: latest `eth-tradingagents-trigger-v1` contract.
 - `tradingagents_decision.json`: latest `tradingagents-decision-v1` contract.
 - `meta_decision.json`: latest `eth-meta-decision-v1` result.
+- `meta_action_event.json`: latest frozen non-secret `meta-action-v1` research event awaiting/already sent to GitHub.
 - `telegram.json`: optional local Telegram credentials (owner-readable only).
 - `progress.jsonl`: append-only, flushed JSONL stage progress for the current and previous invocations.
 - `launchd.stdout.log` / `launchd.stderr.log`: local scheduler logs.
@@ -97,9 +110,11 @@ Every newly processed successful 4H monitor artifact produces one Meta Action sn
 
 The message is Action-first: recommendation and exposure semantics come first, followed by evidence alignment, TradingAgents, 1H/4H direction and regime, 4H momentum/order-flow/options/volatility, confirmation gaps or blocking reasons, optional Kronos shadow context, and the explicit no-order-execution guardrail. `evidence_alignment` remains descriptive and is not presented as a calibrated confidence or probability.
 
-Telegram delivery remains fail-open: a transient send failure leaves the last successfully notified recommendation unchanged while the market-decision pipeline remains successful. If credentials are absent, the run records `SKIPPED_UNCONFIGURED` and advances the baseline; the next newly processed monitor run will still attempt to send its current Action snapshot after Telegram is configured.
+Telegram delivery remains fail-open. Local Mac credentials are optional: if local delivery is not `SENT`, the frozen Meta Action event requests a GitHub delivery fallback. The Mac dispatches only non-secret evidence; the `ETH Meta Action Outcomes` workflow uses the repository's existing `TG_BOT_TOKEN` / `TG_CHAT_ID` Secrets to send the same Action-first message. This also avoids copying Telegram credentials into the launchd environment.
 
-Environment variables `TG_BOT_TOKEN` and `TG_CHAT_ID` take precedence. For launchd, use the default local secret file and restrict it to the owner:
+A failed GitHub dispatch is research/delivery fail-soft relative to the Meta decision and leaves the monitor run processed. The bridge records the failed dispatch and, on later 15-minute polls of the same already-processed 4H run, retries the frozen event until GitHub accepts it. PostgreSQL event insertion is idempotent by deterministic event id.
+
+Local credentials still remain supported. Environment variables `TG_BOT_TOKEN` and `TG_CHAT_ID` take precedence. If a local secret file is used, restrict it to the owner:
 
 ```bash
 mkdir -p ~/.eth-meta-pipeline
@@ -124,6 +139,14 @@ python scripts/run_local_meta_pipeline.py \
 The script uses `gh` to locate and download the latest successful `scheduled-monitor.yml` artifact. It exits immediately with `NO_NEW_MONITOR_RUN` when the same GitHub run was already processed.
 
 Use `--force-ta` for a deliberate full TradingAgents refresh. This is an operator override for analysis refresh only; it does not enable trading execution.
+
+To inspect the current production state without exposing credentials:
+
+```bash
+python scripts/meta_runtime_status.py
+```
+
+The status surface reports the last processed monitor run, Meta recommendation/alignment, TradingAgents decision, local notification state, and Meta research dispatch state. It never reads or prints Telegram credential values.
 
 ## macOS LaunchAgent
 

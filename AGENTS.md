@@ -493,6 +493,40 @@ R2 readiness monitoring is operational observability, not a statistical gate:
 - keep `research_status=ACCUMULATING_EVIDENCE` until a separate human-reviewed research decision defines an evidence threshold;
 - never infer statistical sufficiency from the monitor itself.
 
+
+## 18B. Meta Action Forward-Outcome Evaluation
+
+Meta Action outcome research is a prospective, research-only evaluation of the local Meta Decision layer. It must not change Meta Decision thresholds, TradingAgents trigger rules, forecast/model promotion state, sizing, or trading behavior.
+
+Persist Meta Action research in two append-only PostgreSQL layers:
+
+- `eth_meta_action_events`: immutable event snapshot frozen when a 4H Meta decision is produced;
+- `eth_meta_action_outcomes`: later exact-PIT settlements keyed by event and horizon.
+
+Horizons are exactly:
+
+```text
++4H
++12H
++24H
++72H
+```
+
+Rules:
+
+- one deterministic Meta event is permitted per nominal 4H bucket/version;
+- the event freezes the Meta action, evidence alignment, reason codes, TradingAgents decision, Phase 1H/4H evidence, monitor run id/SHA, and entry price;
+- settlement uses exact future canonical 1H PIT buckets and never interpolates a missing target;
+- reports may describe `ADD`, `HOLD`, `REDUCE`, and `AVOID` forward outcomes separately;
+- reference alignment for Meta directional actions, a thresholded Phase 4H reference, and TradingAgents direction may be shown side-by-side, but the system must not auto-rank or select a winner;
+- `HOLD` and `AVOID` remain non-directional Meta actions; do not fabricate an aligned return for them;
+- no automatic sufficiency threshold, retuning, promotion, sizing change, or execution is allowed;
+- dispatch/persistence failures remain fail-soft relative to the production Meta decision;
+- GitHub Actions is the durable ingestion/settlement plane. The Mac bridge may retry dispatch for the same already-processed monitor run until GitHub accepts the event.
+
+If local Mac Telegram credentials are unavailable or local delivery fails, the dispatched GitHub workflow may use existing GitHub Telegram Secrets as a delivery fallback. Secret values must never be included in the dispatched event.
+
+
 ## 19. Git Rules
 
 Default workflow:

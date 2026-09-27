@@ -60,6 +60,33 @@ The PIT freshness threshold is five hours, matching the Scheduled Monitor watchd
 
 The snapshot is strictly observational. It cannot promote a model, activate SHADOW/PRODUCTION, authorize sizing, or enable paper/live execution.
 
+
+## Meta Action forward-outcome research
+
+The Meta Decision layer now accumulates prospective forward evidence rather than being judged from anecdotal Telegram messages.
+
+For every newly processed 4H monitor run, the Mac bridge freezes one non-secret `meta-action-v1` event containing:
+
+- `ADD`, `HOLD`, `REDUCE`, or `AVOID`;
+- evidence alignment and reason codes;
+- TradingAgents decision;
+- Phase 1H/4H direction, regimes, momentum, order flow, options positioning, and volatility risk;
+- entry price plus monitor run id and Git SHA;
+- local Telegram delivery status.
+
+The event is dispatched to the `ETH Meta Action Outcomes` GitHub workflow. That workflow applies versioned migrations when BKK PostgreSQL is available, persists the immutable event, and settles due +4H/+12H/+24H/+72H outcomes against exact canonical 1H PIT buckets. Missing future PIT is left unsettled; it is never interpolated.
+
+The report presents action cohorts and three explicitly descriptive reference-alignment views:
+
+- Meta directional: `ADD=+1`, `REDUCE=-1`; `HOLD/AVOID` have no directional aligned return;
+- Phase reference: 4H direction >= +20 is +1, <= -20 is -1, otherwise 0;
+- TradingAgents reference: BUY-family +1, SELL-family -1, HOLD-family 0.
+
+These are evidence surfaces, not competing models with an automatic winner. There is no auto-retuning, automatic sizing change, model promotion, or execution.
+
+If the Mac cannot deliver the Action-first Telegram message because local Telegram credentials are absent, the same GitHub workflow can deliver that frozen message using the existing GitHub Telegram Secrets. This fallback does not copy secrets to the Mac or place them in the event payload.
+
+
 ## Registered feature-group ablation
 
 Existing PIT data now supports research-only group ablation for:
