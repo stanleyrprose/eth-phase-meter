@@ -31,7 +31,7 @@ A candidate may become a frozen production descriptive HMM only after explicit r
 
 ## External-source resilience
 
-Deribit history is an external research dependency, not a production/readiness authority. HTTP 429/5xx exhaustion, timeout, or connection failure is therefore recorded as a fail-closed `EXTERNAL_DATA_UNAVAILABLE` bootstrap artifact:
+Deribit history is an external research dependency, not a production/readiness authority. HTTP 429/5xx exhaustion, timeout, or connection failure is therefore recorded as a fail-closed `EXTERNAL_DATA_UNAVAILABLE` bootstrap artifact. Retry behavior is status-aware: 429 and transient 5xx responses use exponential backoff, while Cloudflare 525/526 TLS-origin failures are not retried because repeating the same request does not repair an origin TLS/certificate failure.
 
 - no HMM candidate is granted;
 - no descriptive or predictive promotion is allowed;

@@ -21,6 +21,16 @@ def test_retry_exhaustion_is_classified_as_external_data_unavailable(monkeypatch
     assert exc.value.source == "Deribit"
 
 
+def test_retry_policy_excludes_tls_origin_525_526_but_retries_503():
+    session = bootstrap._http_session()
+    retry = session.get_adapter("https://").max_retries
+    statuses = set(retry.status_forcelist)
+    assert 503 in statuses
+    assert 429 in statuses
+    assert 525 not in statuses
+    assert 526 not in statuses
+
+
 def test_cloudflare_525_is_classified_as_external_data_unavailable(monkeypatch):
     class Session:
         def get(self, *args, **kwargs):
@@ -33,6 +43,22 @@ def test_cloudflare_525_is_classified_as_external_data_unavailable(monkeypatch):
     with pytest.raises(bootstrap.ExternalDataUnavailable) as exc:
         bootstrap.fetch_deribit_4h_history(days=1)
     assert exc.value.status_code == 525
+    assert "non-retryable TLS-origin HTTP 525" in str(exc.value)
+
+
+def test_cloudflare_526_is_classified_as_external_data_unavailable(monkeypatch):
+    class Session:
+        def get(self, *args, **kwargs):
+            response = requests.Response()
+            response.status_code = 526
+            response.url = "https://www.deribit.com/api/v2/public/get_tradingview_chart_data"
+            return response
+
+    monkeypatch.setattr(bootstrap, "_http_session", lambda: Session())
+    with pytest.raises(bootstrap.ExternalDataUnavailable) as exc:
+        bootstrap.fetch_deribit_4h_history(days=1)
+    assert exc.value.status_code == 526
+    assert "non-retryable TLS-origin HTTP 526" in str(exc.value)
 
 
 def test_resilient_bootstrap_writes_fail_closed_unavailable_artifact(monkeypatch, tmp_path):
