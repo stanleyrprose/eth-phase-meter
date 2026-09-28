@@ -87,6 +87,24 @@ These are evidence surfaces, not competing models with an automatic winner. Ther
 If the Mac cannot deliver the Action-first Telegram message because local Telegram credentials are absent, the same GitHub workflow can deliver that frozen message using the existing GitHub Telegram Secrets. This fallback does not copy secrets to the Mac or place them in the event payload.
 
 
+## Formal 3D research review
+
+Once 3D reaches the research-readiness threshold, the weekly readiness workflow also runs a formal real-PIT review at:
+
+`eth_reports/forecast-research/3d-formal-review/review.json`
+
+This formal review is distinct from the legacy/lightweight `model_lab` benchmark. It enforces the PRD v2.3 research methodology:
+
+- Purged Walk-Forward with any training label ending at or after the test start removed;
+- 4-hour embargo;
+- 3D = 18 bars for overlapping-label diagnostics and moving-block bootstrap;
+- dynamic baseline selection with 0.5H / 1.0H / 1.5H block-sensitivity;
+- candidate Brier Skill relative to the selected dynamic baseline;
+- regime conditioning evaluated as incremental paired OOS evidence;
+- calibration deferred unless the raw candidate first passes the incremental gate.
+
+A 3D horizon becoming `READY_FOR_RESEARCH` only authorizes this review. It does not imply candidate eligibility, SHADOW activation, Production Approval, sizing approval, or execution.
+
 ## Registered feature-group ablation
 
 Existing PIT data now supports research-only group ablation for:

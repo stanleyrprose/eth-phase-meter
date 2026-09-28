@@ -35,6 +35,7 @@ Current authoritative requirements are `docs/FORECAST_RESEARCH_PRD_v2.3.md` and 
 - Meta Action Forward-Outcome Evaluation v1 is implemented as a prospective research-only layer: each 4H `ADD/HOLD/REDUCE/AVOID` decision is frozen with its TradingAgents and Phase evidence, dispatched from the Mac bridge to GitHub Actions, persisted in BKK PostgreSQL, and settled at +4H/+12H/+24H/+72H from exact future 1H PIT. Reports keep Meta/Phase-reference/TradingAgents-reference evidence descriptive, prohibit automatic winner selection/retuning/sizing/execution, and can use GitHub Telegram Secrets as a fallback when local Mac Telegram credentials are unavailable.
 - Weekly PIT-backed ETH single-asset sizing research checkpoint comparing fixed, conviction-scaled, and volatility-targeted policies; 250 clean intervals trigger human review only and never automatic promotion/execution.
 - Unified weekly `research-gates.json` snapshot for forecast readiness, sizing readiness, effective Production Approval, PIT freshness/data health, and one monitor-facing next-action state.
+- Formal real-PIT 3D research review using Purged Walk-Forward, 4h embargo, 18-bar moving-block sensitivity, dynamic-baseline selection, candidate Brier Skill, and fail-closed raw incremental gates.
 - Candidate model promotion remains manual through PR/review even after statistical gates pass.
 
 ## Intentionally gated by real data
