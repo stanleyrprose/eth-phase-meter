@@ -132,11 +132,15 @@ def evaluate_coverage(
 
     coverage_pct = round(100.0 * covered / len(expected), 2) if expected else 100.0
     p95_delay = _p95(delays)
-    healthy = (
-        not missing
-        and not duplicates
-        and (p95_delay is None or p95_delay <= max_p95_delay_minutes)
-    )
+    delay_breached = p95_delay is not None and p95_delay > max_p95_delay_minutes
+    reasons = []
+    if missing:
+        reasons.append("MISSING_BUCKETS")
+    if duplicates:
+        reasons.append("DUPLICATE_DISPATCH")
+    if delay_breached:
+        reasons.append("P95_DELAY_BREACH")
+    healthy = not reasons
     return {
         "kind": "SCHEDULER_RELIABILITY_AUDIT",
         "checked_at": now.astimezone(timezone.utc).isoformat(),
@@ -158,6 +162,8 @@ def evaluate_coverage(
         "max_p95_delay_minutes": max_p95_delay_minutes,
         "strategic_failed_attempts": strategic_failed_attempts,
         "tactical_failed_attempts": tactical_failed_attempts,
+        "audit_reasons": reasons,
+        "audit_reason": "+".join(reasons) if reasons else "OK",
         "healthy": healthy,
     }
 
@@ -179,6 +185,10 @@ def _append_github_output(path: str | None, report: dict) -> None:
         handle.write(f"healthy={'true' if report['healthy'] else 'false'}\n")
         handle.write(f"coverage_pct={report['coverage_pct']}\n")
         handle.write(f"missing_count={report['missing_count']}\n")
+        handle.write(f"duplicate_count={report['duplicate_count']}\n")
+        handle.write(f"out_of_band_count={report['out_of_band_success_count']}\n")
+        handle.write(f"redundant_success_attempts={report['redundant_success_attempts']}\n")
+        handle.write(f"audit_reason={report['audit_reason']}\n")
         value = report.get("p95_dispatch_delay_minutes")
         handle.write(f"p95_delay_minutes={'' if value is None else value}\n")
 
