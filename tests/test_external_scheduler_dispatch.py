@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 
-from scripts.external_scheduler_dispatch import STRATEGIC_WORKFLOW, TACTICAL_WORKFLOW, bucket_start, decide
+from scripts.external_scheduler_dispatch import (
+    STRATEGIC_WORKFLOW, TACTICAL_WORKFLOW, _has_dispatch_lease, _record_dispatch_lease, bucket_start, decide
+)
 
 
 UTC = timezone.utc
@@ -99,3 +101,22 @@ def test_before_nominal_minute_does_not_dispatch_previous_bucket():
     )
     assert decision.action == "SKIP"
     assert decision.reason == "BEFORE_NOMINAL_MINUTE"
+
+
+def test_durable_dispatch_lease_survives_github_eventual_consistency(tmp_path):
+    ledger = tmp_path / "dispatch-ledger.json"
+    nominal = "2026-09-28T08:15:00+00:00"
+    dispatched_at = datetime(2026, 9, 28, 8, 20, tzinfo=UTC)
+
+    assert not _has_dispatch_lease(ledger, STRATEGIC_WORKFLOW, nominal)
+    _record_dispatch_lease(ledger, STRATEGIC_WORKFLOW, nominal, dispatched_at)
+    assert _has_dispatch_lease(ledger, STRATEGIC_WORKFLOW, nominal)
+    assert not _has_dispatch_lease(ledger, TACTICAL_WORKFLOW, nominal)
+
+
+def test_dispatch_lease_is_specific_to_nominal_bucket(tmp_path):
+    ledger = tmp_path / "dispatch-ledger.json"
+    _record_dispatch_lease(ledger, TACTICAL_WORKFLOW, "2026-09-28T09:15:00+00:00", datetime(2026, 9, 28, 9, 19, tzinfo=UTC))
+
+    assert _has_dispatch_lease(ledger, TACTICAL_WORKFLOW, "2026-09-28T09:15:00+00:00")
+    assert not _has_dispatch_lease(ledger, TACTICAL_WORKFLOW, "2026-09-28T10:15:00+00:00")

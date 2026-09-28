@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
 import subprocess
 from typing import Any, Mapping
 
@@ -12,6 +13,7 @@ ACTIVE_STATUSES = {"queued", "in_progress", "waiting", "requested", "pending"}
 STRATEGIC_WORKFLOW = "scheduled-monitor.yml"
 TACTICAL_WORKFLOW = "tactical-1h.yml"
 NOMINAL_MINUTE = 15
+DEFAULT_LEDGER = Path.home() / ".eth-phase-scheduler" / "dispatch-ledger.json"
 
 
 def _parse_utc(value: Any) -> datetime | None:
@@ -124,12 +126,50 @@ def _dispatch(gh: str, repo: str, workflow: str) -> None:
     subprocess.run([gh, "workflow", "run", workflow, "--repo", repo, "--ref", "main"], check=True, text=True)
 
 
+def _lease_key(workflow: str, nominal_start: str) -> str:
+    return f"{workflow}|{nominal_start}"
+
+
+def _load_ledger(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {"dispatches": {}}
+    if not isinstance(payload, dict) or not isinstance(payload.get("dispatches"), dict):
+        return {"dispatches": {}}
+    return payload
+
+
+def _has_dispatch_lease(path: Path, workflow: str, nominal_start: str) -> bool:
+    return _lease_key(workflow, nominal_start) in _load_ledger(path)["dispatches"]
+
+
+def _record_dispatch_lease(path: Path, workflow: str, nominal_start: str, dispatched_at: datetime) -> None:
+    payload = _load_ledger(path)
+    payload["dispatches"][_lease_key(workflow, nominal_start)] = {
+        "workflow": workflow,
+        "nominal_start": nominal_start,
+        "dispatched_at": dispatched_at.astimezone(timezone.utc).isoformat(),
+    }
+    # Keep the ledger bounded while retaining enough history for audit/debugging.
+    cutoff = dispatched_at.astimezone(timezone.utc) - timedelta(days=7)
+    payload["dispatches"] = {
+        key: value for key, value in payload["dispatches"].items()
+        if (_parse_utc(value.get("dispatched_at")) or cutoff) >= cutoff
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+    tmp.replace(path)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Reliable external scheduler for ETH 4H Strategic / 1H Tactical workflows.")
     parser.add_argument("--repo", default="stanleyrprose/eth-phase-meter")
     parser.add_argument("--gh", default="/opt/homebrew/bin/gh")
     parser.add_argument("--now", help="ISO-8601 time for testing; defaults to current UTC time")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--ledger", default=str(DEFAULT_LEDGER), help="Durable local dispatch lease ledger")
     args = parser.parse_args()
 
     now = _parse_utc(args.now) if args.now else datetime.now(timezone.utc)
@@ -139,9 +179,14 @@ def main() -> int:
     strategic_runs = _gh_json(args.gh, args.repo, STRATEGIC_WORKFLOW)
     tactical_runs = _gh_json(args.gh, args.repo, TACTICAL_WORKFLOW)
     decision = decide(now=now, strategic_runs=strategic_runs, tactical_runs=tactical_runs)
+    ledger_path = Path(args.ledger).expanduser()
 
-    if decision.action == "DISPATCH" and decision.workflow and not args.dry_run:
-        _dispatch(args.gh, args.repo, decision.workflow)
+    if decision.action == "DISPATCH" and decision.workflow and decision.nominal_start:
+        if _has_dispatch_lease(ledger_path, decision.workflow, decision.nominal_start):
+            decision = DispatchDecision("SKIP", None, decision.nominal_start, "LOCAL_DISPATCH_LEASE_PRESENT")
+        elif not args.dry_run:
+            _dispatch(args.gh, args.repo, decision.workflow)
+            _record_dispatch_lease(ledger_path, decision.workflow, decision.nominal_start, now)
 
     print(json.dumps({
         "checked_at": now.astimezone(timezone.utc).isoformat(),
