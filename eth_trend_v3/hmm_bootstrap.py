@@ -17,6 +17,18 @@ from hmmlearn.hmm import GaussianHMM
 from sklearn.metrics import adjusted_rand_score
 
 DERIBIT_URL = "https://www.deribit.com/api/v2/public/get_tradingview_chart_data"
+RETRYABLE_HTTP_STATUS = frozenset({429, *range(500, 600)})
+
+
+class ExternalDataUnavailable(RuntimeError):
+    """Retryable upstream/network failure that must not grant HMM evidence."""
+
+    def __init__(self, source: str, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.source = source
+        self.status_code = status_code
+
+
 FEATURE_SETS = {
     "return_4h": ["log_return", "realized_volatility", "log_volume_change"],
     "return_24h": ["log_return_24h", "realized_volatility", "log_volume_change"],
@@ -33,7 +45,7 @@ class RobustScalerState:
 
 def _http_session() -> requests.Session:
     session = requests.Session()
-    retry = Retry(total=4, connect=4, read=4, status=4, backoff_factor=1.0, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=frozenset(["GET"]))
+    retry = Retry(total=4, connect=4, read=4, status=4, backoff_factor=1.0, status_forcelist=tuple(RETRYABLE_HTTP_STATUS), allowed_methods=frozenset(["GET"]))
     session.mount("https://", HTTPAdapter(max_retries=retry))
     return session
 
@@ -58,8 +70,28 @@ def fetch_deribit_4h_history(days: int = 365, chunk_days: int = 30) -> pd.DataFr
             "end_timestamp": int(chunk_end.timestamp() * 1000),
             "resolution": "60",
         }
-        r = session.get(DERIBIT_URL, params=params, timeout=30)
-        r.raise_for_status()
+        try:
+            r = session.get(DERIBIT_URL, params=params, timeout=30)
+            r.raise_for_status()
+        except requests.exceptions.RetryError as exc:
+            raise ExternalDataUnavailable(
+                "Deribit",
+                "Deribit history remained unavailable after configured HTTP retries",
+            ) from exc
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            raise ExternalDataUnavailable(
+                "Deribit",
+                f"Deribit history transport failure: {type(exc).__name__}",
+            ) from exc
+        except requests.exceptions.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code in RETRYABLE_HTTP_STATUS:
+                raise ExternalDataUnavailable(
+                    "Deribit",
+                    f"Deribit history returned retryable HTTP {status_code}",
+                    status_code=status_code,
+                ) from exc
+            raise
         body = r.json()
         if body.get("error"):
             raise RuntimeError(f"Deribit error: {body['error']}")
@@ -537,6 +569,45 @@ def render_markdown(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _external_unavailable_report(exc: ExternalDataUnavailable) -> dict:
+    return {
+        "schema_version": "hmm-comparative-v2",
+        "status": "EXTERNAL_DATA_UNAVAILABLE",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": exc.source,
+        "retryable": True,
+        "status_code": exc.status_code,
+        "message": str(exc),
+        "observation_count": 0,
+        "variants": {},
+        "preferred_descriptive_variant": None,
+        "promotion_allowed": False,
+        "promotion_note": (
+            "No HMM evidence is granted while the external historical source is unavailable. "
+            "Retry on a later research run."
+        ),
+    }
+
+
+def _render_external_unavailable(report: dict) -> str:
+    status = report.get("status_code")
+    status_text = f" HTTP {status}" if status is not None else ""
+    return "\n".join(
+        [
+            "# HMM v2 Comparative Bootstrap Report",
+            "",
+            f"Status: **EXTERNAL_DATA_UNAVAILABLE**",
+            f"Source: {report.get('source')}{status_text}",
+            f"Generated: {report.get('generated_at')}",
+            "",
+            "The external historical source remained unavailable after configured retries.",
+            "No HMM candidate, descriptive promotion, predictive evidence, or production change is granted.",
+            "The parent research-readiness workflow may continue because this is a fail-closed external dependency state, not positive evidence.",
+            "",
+        ]
+    )
+
+
 def run(days: int = 365, out_dir: str = "eth_reports/hmm_bootstrap") -> dict:
     bars = fetch_deribit_4h_history(days=days)
     features = build_bootstrap_features(bars)
@@ -547,3 +618,16 @@ def run(days: int = 365, out_dir: str = "eth_reports/hmm_bootstrap") -> dict:
     (out / "report.md").write_text(render_markdown(report), encoding="utf-8")
     features.to_csv(out / "features.csv", index=False)
     return report
+
+
+def run_resilient(days: int = 365, out_dir: str = "eth_reports/hmm_bootstrap") -> dict:
+    """Run HMM bootstrap, degrading only retryable external-history failures to fail-closed UNAVAILABLE."""
+    try:
+        return run(days=days, out_dir=out_dir)
+    except ExternalDataUnavailable as exc:
+        report = _external_unavailable_report(exc)
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        (out / "report.md").write_text(_render_external_unavailable(report), encoding="utf-8")
+        return report
