@@ -17,7 +17,9 @@ from hmmlearn.hmm import GaussianHMM
 from sklearn.metrics import adjusted_rand_score
 
 DERIBIT_URL = "https://www.deribit.com/api/v2/public/get_tradingview_chart_data"
-RETRYABLE_HTTP_STATUS = frozenset({429, *range(500, 600)})
+NON_RETRYABLE_TLS_HTTP_STATUS = frozenset((525, 526))
+EXTERNAL_UNAVAILABLE_HTTP_STATUS = frozenset({429, *range(500, 600)})
+RETRYABLE_HTTP_STATUS = EXTERNAL_UNAVAILABLE_HTTP_STATUS - NON_RETRYABLE_TLS_HTTP_STATUS
 
 
 class ExternalDataUnavailable(RuntimeError):
@@ -85,10 +87,15 @@ def fetch_deribit_4h_history(days: int = 365, chunk_days: int = 30) -> pd.DataFr
             ) from exc
         except requests.exceptions.HTTPError as exc:
             status_code = exc.response.status_code if exc.response is not None else None
-            if status_code in RETRYABLE_HTTP_STATUS:
+            if status_code in EXTERNAL_UNAVAILABLE_HTTP_STATUS:
+                retry_text = (
+                    "non-retryable TLS-origin"
+                    if status_code in NON_RETRYABLE_TLS_HTTP_STATUS
+                    else "retryable"
+                )
                 raise ExternalDataUnavailable(
                     "Deribit",
-                    f"Deribit history returned retryable HTTP {status_code}",
+                    f"Deribit history returned {retry_text} HTTP {status_code}",
                     status_code=status_code,
                 ) from exc
             raise
