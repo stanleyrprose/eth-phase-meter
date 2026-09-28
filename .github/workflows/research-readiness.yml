@@ -42,6 +42,9 @@ jobs:
       - id: gates
         name: Build unified research gate snapshot
         run: python -m scripts.build_research_gates
+      - name: Run formal 3D research review when research is ready
+        if: steps.readiness.outputs.run_research_benchmark == 'true'
+        run: python -m scripts.run_3d_formal_research_review
       - name: Run research benchmark when a horizon is ready
         if: steps.readiness.outputs.run_research_benchmark == 'true'
         run: python -m scripts.run_backtest
@@ -62,6 +65,7 @@ jobs:
             eth_reports/research-readiness/
             eth_reports/sizing-research/
             eth_reports/research-gates/
+            eth_reports/forecast-research/3d-formal-review/
             eth_reports/model_lab/
             eth_reports/validation_report.json
             eth_reports/hmm_bootstrap/
