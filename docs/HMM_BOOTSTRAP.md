@@ -29,6 +29,20 @@ Passing these gates does **not** promote the model. The bootstrap report always 
 
 A candidate may become a frozen production descriptive HMM only after explicit review. It may enter the 3D/7D/30D forecast feature set only if separate out-of-sample ablation shows an improvement in Brier score/calibration versus the same forecast without HMM regime features.
 
+## External-source resilience
+
+Deribit history is an external research dependency, not a production/readiness authority. HTTP 429/5xx exhaustion, timeout, or connection failure is therefore recorded as a fail-closed `EXTERNAL_DATA_UNAVAILABLE` bootstrap artifact:
+
+- no HMM candidate is granted;
+- no descriptive or predictive promotion is allowed;
+- no production record is written;
+- HMM forecast ablation is skipped for that run;
+- the parent Forecast Research Readiness workflow can remain healthy because the core PIT research gates were already evaluated independently.
+
+Code errors, malformed source contracts, feature-contract failures, and HMM/model failures are **not** downgraded and still fail the workflow.
+
+When bootstrap succeeds, forecast ablation reuses the exact `eth_reports/hmm_bootstrap/features.csv` produced by that bootstrap instead of issuing a second Deribit history request. This removes duplicate external calls and guarantees same-sample reproducibility between bootstrap and ablation.
+
 ## Workflow
 
 Run **HMM Historical Bootstrap** manually from GitHub Actions or allow the weekly Sunday schedule to execute. Artifacts are uploaded under `hmm-bootstrap-report` and include `report.json`, `report.md`, and `features.csv`.

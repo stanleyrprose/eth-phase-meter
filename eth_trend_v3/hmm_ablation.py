@@ -311,10 +311,27 @@ def render_markdown(report: dict) -> str:
     return "\n".join(lines)
 
 
-def run(days: int = 365, out_dir: str = "eth_reports/hmm_ablation") -> dict:
-    bars = fetch_deribit_4h_history(days=days)
-    features = build_bootstrap_features(bars)
+def run(
+    days: int = 365,
+    out_dir: str = "eth_reports/hmm_ablation",
+    *,
+    features_path: str | None = None,
+) -> dict:
+    if features_path:
+        source = Path(features_path)
+        if not source.exists():
+            raise FileNotFoundError(f"HMM bootstrap features not found: {source}")
+        features = pd.read_csv(source)
+        required = {"timestamp", "log_return", "log_return_24h", "realized_volatility", "log_volume_change"}
+        missing = sorted(required.difference(features.columns))
+        if missing:
+            raise ValueError(f"HMM bootstrap feature contract missing columns: {missing}")
+        features["timestamp"] = pd.to_datetime(features["timestamp"], utc=True, errors="raise")
+    else:
+        bars = fetch_deribit_4h_history(days=days)
+        features = build_bootstrap_features(bars)
     report = run_ablation(features)
+    report["history_source"] = "bootstrap_features_artifact" if features_path else "live_deribit_fetch"
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
