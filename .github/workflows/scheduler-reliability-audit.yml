@@ -41,8 +41,8 @@ jobs:
           python -m scripts.send_system_health
           --component "Scheduler reliability"
           --status DEGRADED
-          --reason "24H_AUDIT_FAILED"
-          --impact "Coverage ${{ steps.audit.outputs.coverage_pct }}%; missing ${{ steps.audit.outputs.missing_count }} bucket(s); P95 dispatch delay ${{ steps.audit.outputs.p95_delay_minutes }} min."
+          --reason "${{ steps.audit.outputs.audit_reason }}"
+          --impact "Coverage ${{ steps.audit.outputs.coverage_pct }}%; missing ${{ steps.audit.outputs.missing_count }}; duplicates ${{ steps.audit.outputs.duplicate_count }}; out-of-band ${{ steps.audit.outputs.out_of_band_count }}; redundant successes ${{ steps.audit.outputs.redundant_success_attempts }}; P95 delay ${{ steps.audit.outputs.p95_delay_minutes }} min."
       - name: Upload reliability report
         if: always()
         uses: actions/upload-artifact@v4

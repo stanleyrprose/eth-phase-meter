@@ -31,6 +31,7 @@ def test_coverage_counts_strategic_boundary_and_tactical_hours():
     assert report["covered_buckets"] == 4
     assert report["coverage_pct"] == 100.0
     assert report["p95_dispatch_delay_minutes"] == 5.0
+    assert report["audit_reason"] == "OK"
     assert report["healthy"] is True
 
 
@@ -42,6 +43,7 @@ def test_missing_bucket_fails_audit():
         window_hours=4,
     )
     assert report["missing_count"] == 2
+    assert report["audit_reason"] == "MISSING_BUCKETS"
     assert report["healthy"] is False
 
 
@@ -91,6 +93,7 @@ def test_second_on_time_success_is_scheduler_duplicate():
     )
 
     assert report["duplicate_count"] == 1
+    assert report["audit_reason"] == "DUPLICATE_DISPATCH"
     assert report["healthy"] is False
 
 
