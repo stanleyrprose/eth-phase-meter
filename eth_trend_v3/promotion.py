@@ -17,6 +17,7 @@ class GateConfig:
     min_research_brier_skill: float = 0.0
     min_shadow_brier_skill: float = 0.0
     max_calibration_error: float = 0.15
+    min_effective_shadow_n: int = 0
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ def promotion_gate(evidence:Mapping[str,Any], *, gate_version:str="v1", config: 
     if float(evidence.get("shadow_brier_skill",0))<=cfg.min_shadow_brier_skill: reasons.append("NO_MODEL_BEATS_BASELINE")
     cal=evidence.get("calibration_error")
     if cal is not None and float(cal)>cfg.max_calibration_error: reasons.append("CALIBRATION_FAILED")
+    if int(evidence.get("effective_shadow_n", 0)) < cfg.min_effective_shadow_n: reasons.append("INSUFFICIENT_EFFECTIVE_SAMPLE")
     return GateDecision(not reasons,"PROMOTION_ELIGIBLE" if not reasons else "UNAVAILABLE",sorted(set(reasons)),cfg.version)
 
 

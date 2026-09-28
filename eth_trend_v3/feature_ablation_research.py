@@ -30,6 +30,11 @@ def run_group_ablation(folds, groups: dict[str, list[str]], *, horizon_bars: int
     reverse = _sequential(folds, reverse_groups, horizon_bars=horizon_bars, baseline_spec=baseline_spec, bootstrap_reps=bootstrap_reps)
     forward_pass = {x["group"]: bool(x["result"].get("passes_incremental_gate")) for x in sequential}
     reverse_pass = {x["group"]: bool(x["result"].get("passes_incremental_gate")) for x in reverse}
+    order_checks = [
+        {"order": list(ordered), "passing_groups": [g for g in ordered if forward_pass.get(g)]},
+        {"order": list(reverse_groups), "passing_groups": [g for g in reverse_groups if reverse_pass.get(g)]},
+    ]
+    pass_rate = {g: sum(g in check["passing_groups"] for check in order_checks) / len(order_checks) for g in ordered}
     order_robust = {g: forward_pass.get(g) == reverse_pass.get(g) for g in ordered}
 
     survivors = [g for g in ordered if forward_pass.get(g) and reverse_pass.get(g)]
@@ -38,6 +43,7 @@ def run_group_ablation(folds, groups: dict[str, list[str]], *, horizon_bars: int
         "reverse_sequential": reverse,
         "leave_one_group_out": leave_one_out,
         "order_robustness": order_robust,
+        "order_robustness_details": {"checks": order_checks, "pass_rate_by_group": pass_rate},
         "survivor_groups": survivors,
         "interpretation_note": "SHAP/coefficient importance may explain models but does not establish incremental predictive value; survivors must be robust to at least forward/reverse ordering.",
     }

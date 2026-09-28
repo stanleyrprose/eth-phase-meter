@@ -16,6 +16,7 @@ class BaselineSpec:
     window_days: int | None = None
     half_life_days: float | None = None
     prior_strength: float = 20.0
+    min_regime_count: int = 10
     regime_key: str = "regime"
 
 
@@ -34,7 +35,7 @@ def _global_rate(y: np.ndarray) -> float:
 def _regime_probability(train, y, current_regime, spec: BaselineSpec) -> float:
     global_p = _global_rate(y)
     idx = [i for i, row in enumerate(train) if row.get(spec.regime_key) == current_regime and current_regime is not None]
-    if not idx:
+    if len(idx) < spec.min_regime_count:
         return global_p
     regime_p = float(y[np.asarray(idx, dtype=int)].mean())
     if spec.name == "regime":

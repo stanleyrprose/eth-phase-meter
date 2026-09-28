@@ -53,11 +53,34 @@ def settle_record(record: Mapping[str, Any], *, entry_price: float, path_prices:
     return out
 
 
-def shadow_metrics(records:list[dict])->dict:
+def settle_shadow_record(record: Mapping[str, Any], price_path: Sequence[tuple[Any, float]]) -> dict:
+    if record.get("settled"):
+        return dict(record)
+    settlement = datetime.fromisoformat(str(record["settlement_time"]).replace("Z", "+00:00"))
+    eligible = []
+    for timestamp, price in price_path:
+        parsed = timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+        if parsed <= settlement:
+            eligible.append((parsed, float(price)))
+    if not eligible or max(timestamp for timestamp, _ in eligible) < settlement:
+        return {**record, "settlement_status": "PENDING"}
+    eligible.sort(key=lambda item: item[0])
+    entry = float(record.get("entry_price") or record.get("market_state", {}).get("price") or 0)
+    if entry <= 0:
+        return {**record, "settlement_status": "ENTRY_PRICE_MISSING"}
+    out = settle_record(record, entry_price=entry, path_prices=[price for _, price in eligible], settled_at=settlement.isoformat())
+    out["settlement_status"] = "SETTLED"
+    return out
+
+
+def shadow_metrics(records:list[dict], *, horizon_bars: int | None = None)->dict:
     settled=[r for r in records if r.get("settled") and r.get("data_health")=="NORMAL"]
     if not settled: return {"available":False,"reason":"NO_NORMAL_SETTLED_FORECASTS"}
     y=np.asarray([r["actual_direction"] for r in settled]); p=np.asarray([r["probability"] for r in settled]); bp=np.asarray([r["baseline_probability"] for r in settled])
-    return {"available":True,"settled_n":len(settled),"brier":brier(y,p),"brier_skill":brier_skill_score(y,p,bp),"log_loss":log_loss(y,p),"degraded_excluded":len([r for r in records if r.get("settled") and r.get("data_health")!="NORMAL"])}
+    out={"available":True,"settled_n":len(settled),"brier":brier(y,p),"brier_skill":brier_skill_score(y,p,bp),"log_loss":log_loss(y,p),"degraded_excluded":len([r for r in records if r.get("settled") and r.get("data_health")!="NORMAL"])}
+    if horizon_bars:
+        out["effective_settled_evidence"] = effective_sample_diagnostic(len(settled), horizon_bars)
+    return out
 
 
 def shadow_evidence_gate(records: list[dict], *, horizon: str, horizon_bars: int, min_regimes: int = 2) -> dict:

@@ -49,6 +49,30 @@ def compare_calibration(y_test, raw_test, raw_cal, y_cal, *, eligible: bool, sam
     return {"available": True, "winner": winner, "methods": out, "note": "NO_CALIBRATION is a formal candidate; calibration cannot rescue an ineligible raw model."}
 
 
+def compare_calibration_windows(y, raw, *, train_end: int, test_start: int, rolling_windows=(60, 120), eligible: bool = True) -> dict:
+    """Compare calibration windows while keeping final-test outcomes out of fitting."""
+    y = np.asarray(y, dtype=int)
+    raw = np.asarray(raw, dtype=float)
+    if not eligible:
+        return {"available": False, "reason": "CALIBRATION_NOT_ELIGIBLE"}
+    if len(y) != len(raw) or not (0 < train_end < test_start < len(y)):
+        return {"available": False, "reason": "INVALID_CALIBRATION_SPLIT"}
+    candidates = {"expanding": (raw[train_end:test_start], y[train_end:test_start])}
+    for window in rolling_windows:
+        window = int(window)
+        start = max(train_end, test_start - window)
+        candidates[f"rolling-{window}"] = (raw[start:test_start], y[start:test_start])
+    reports = {
+        name: compare_calibration(y[test_start:], raw[test_start:], raw_cal, y_cal, eligible=True)
+        for name, (raw_cal, y_cal) in candidates.items()
+    }
+    valid = [name for name, report in reports.items() if report.get("available")]
+    if not valid:
+        return {"available": False, "reason": "CALIBRATION_FAILED", "windows": reports}
+    winner = min(valid, key=lambda name: reports[name]["methods"][reports[name]["winner"]]["brier"])
+    return {"available": True, "winner_window": winner, "windows": reports}
+
+
 def compare_calibration_stability(y_test, raw_test, raw_cal, y_cal, *, eligible: bool, rolling_window: int = 90, half_life: float = 45.0) -> dict:
     raw_cal = np.asarray(raw_cal, dtype=float)
     y_cal = np.asarray(y_cal, dtype=int)

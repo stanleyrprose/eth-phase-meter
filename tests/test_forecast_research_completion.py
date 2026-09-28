@@ -27,7 +27,7 @@ def test_regime_and_shrunk_baselines_fallback_and_predict():
 def test_ablation_reports_order_robustness():
     r=_rows(); folds=purged_walk_forward(r,min_train=90,test_size=30)
     report=run_group_ablation(folds,{"trend":["trend"],"risk":["volatility_risk"]},horizon_bars=3,bootstrap_reps=20)
-    assert report["order_robustness"]["checks"] and set(report["order_robustness"]["pass_rate_by_group"])=={"trend","risk"}
+    assert report["order_robustness_details"]["checks"] and set(report["order_robustness_details"]["pass_rate_by_group"])=={"trend","risk"}
 
 
 def test_calibration_window_selection_keeps_test_out_of_fit():
