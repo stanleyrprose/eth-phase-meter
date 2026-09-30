@@ -244,18 +244,27 @@ def build_due_meta_action_outcomes(
             if not target_row:
                 continue
 
+            expected_path_times = [
+                nominal + timedelta(hours=offset) for offset in range(1, horizon + 1)
+            ]
+            missing_path_times = [
+                timestamp for timestamp in expected_path_times if timestamp not in prices
+            ]
             path_rows = [
-                prices[nominal + timedelta(hours=offset)]
-                for offset in range(1, horizon + 1)
-                if nominal + timedelta(hours=offset) in prices
+                prices[timestamp] for timestamp in expected_path_times if timestamp in prices
             ]
             if not path_rows:
                 continue
+            path_complete = not missing_path_times
             metrics = path_outcome(
                 float(entry_price),
                 [float(row["price"]) for row in path_rows],
             )
-            actual_return = float(metrics["actual_return"])
+            actual_return = (float(target_row["price"]) / float(entry_price)) - 1.0
+            if not path_complete:
+                metrics["mae"] = None
+                metrics["mfe"] = None
+            metrics["actual_return"] = actual_return
             due.append(
                 {
                     "event_id": event_id,
@@ -278,7 +287,10 @@ def build_due_meta_action_outcomes(
                     ),
                     "path_bars": len(path_rows),
                     "expected_path_bars": horizon,
-                    "path_complete": len(path_rows) == horizon,
+                    "path_complete": path_complete,
+                    "missing_path_nominal_times": [
+                        timestamp.isoformat() for timestamp in missing_path_times
+                    ],
                     "target_workflow_run_id": target_row.get("workflow_run_id"),
                 }
             )
@@ -339,8 +351,16 @@ def _return_summary(rows: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[s
         "median_forward_return": _round(median(returns)),
         "positive_return_rate": _round(sum(value > 0 for value in returns) / len(returns)),
         "mean_absolute_return": _round(mean(abs(value) for value in returns)),
-        "mean_mae": _round(mean(float(outcome["mae"]) for _, outcome in rows)),
-        "mean_mfe": _round(mean(float(outcome["mfe"]) for _, outcome in rows)),
+        "mean_mae": _round(
+            mean(float(outcome["mae"]) for _, outcome in rows if outcome.get("path_complete"))
+        )
+        if any(outcome.get("path_complete") for _, outcome in rows)
+        else None,
+        "mean_mfe": _round(
+            mean(float(outcome["mfe"]) for _, outcome in rows if outcome.get("path_complete"))
+        )
+        if any(outcome.get("path_complete") for _, outcome in rows)
+        else None,
         "complete_path_n": sum(bool(outcome.get("path_complete")) for _, outcome in rows),
     }
 

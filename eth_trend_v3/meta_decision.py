@@ -190,26 +190,26 @@ def evaluate_meta_decision(
     gated = recommendation == "AVOID"
 
     if not gated:
-        add_confirmed = (
-            ta_side > 0
-            and d4 >= 25
+        phase_add_confirmed = (
+            d4 >= 25
             and d1 >= 15
             and momentum4 >= 20
             and order_flow4 > 0
             and options4 >= -25
         )
-        reduce_confirmed = (
-            ta_side < 0
-            and d4 <= -20
+        phase_reduce_confirmed = (
+            d4 <= -20
             and d1 <= -10
             and (momentum4 <= 0 or order_flow4 <= 0)
         )
+        add_confirmed = phase_add_confirmed and ta_side >= 0
+        reduce_confirmed = phase_reduce_confirmed and ta_side <= 0
 
         if add_confirmed:
             recommendation = "ADD"
             reasons.extend(
                 [
-                    "TRADINGAGENTS_BUY",
+                    "TRADINGAGENTS_BUY" if ta_side > 0 else "PHASE_BULLISH_TA_NEUTRAL",
                     "4H_BULL_CONFIRMATION",
                     "1H_BULL_CONFIRMATION",
                     "MOMENTUM_CONFIRMED",
@@ -221,7 +221,7 @@ def evaluate_meta_decision(
             recommendation = "REDUCE"
             reasons.extend(
                 [
-                    "TRADINGAGENTS_SELL",
+                    "TRADINGAGENTS_SELL" if ta_side < 0 else "PHASE_BEARISH_TA_NEUTRAL",
                     "4H_BEAR_CONFIRMATION",
                     "1H_BEAR_CONFIRMATION",
                     "MOMENTUM_OR_FLOW_DETERIORATION",
