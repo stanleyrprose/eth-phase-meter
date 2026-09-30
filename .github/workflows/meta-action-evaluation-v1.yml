@@ -1,0 +1,29 @@
+name: Meta Action Evaluation v1
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup required BKK PostgreSQL tunnel
+        uses: ./.github/actions/setup-bkk-postgres
+        with:
+          ssh-key: ${{ secrets.BINANCE_EGRESS_SSH_KEY }}
+          required: "true"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-ci.lock
+      - name: Generate research-only evaluation
+        run: python -m scripts.evaluate_meta_action_v1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meta-action-evaluation-v1-${{ github.run_id }}
+          path: eth_reports/governance/meta_action_evaluation_v1.json
+          if-no-files-found: error
+          retention-days: 90
