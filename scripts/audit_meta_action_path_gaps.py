@@ -3,7 +3,12 @@ from __future__ import annotations
 import argparse, json, os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from eth_trend_v3.meta_action_outcomes import HORIZON_HOURS, load_meta_action_events, load_meta_action_outcomes
+from eth_trend_v3.meta_action_outcomes import (
+    HORIZON_HOURS,
+    PATH_CADENCE_HOURS,
+    load_meta_action_events,
+    load_meta_action_outcomes,
+)
 from eth_trend_v3.tactical_outcomes import _canonical_1h_prices, _parse_time, load_tactical_price_records
 
 def build_gap_audit(events, outcomes, pit_records, *, now=None):
@@ -22,8 +27,11 @@ def build_gap_audit(events, outcomes, pit_records, *, now=None):
             target = nominal + timedelta(hours=horizon)
             key = (event_id, horizon)
             if key in settled:
-                missing = [nominal + timedelta(hours=i) for i in range(1, horizon + 1)
-                           if nominal + timedelta(hours=i) not in prices]
+                missing = [
+                    nominal + timedelta(hours=i)
+                    for i in range(PATH_CADENCE_HOURS, horizon + 1, PATH_CADENCE_HOURS)
+                    if nominal + timedelta(hours=i) not in prices
+                ]
                 for ts in missing:
                     item = gaps.setdefault(ts.isoformat(), {"nominal_time": ts.isoformat(), "affected": []})
                     item["affected"].append({"event_id": event_id, "horizon_hours": horizon})
@@ -35,6 +43,7 @@ def build_gap_audit(events, outcomes, pit_records, *, now=None):
     return {
         "status": "GAPS_FOUND" if ordered or unsettled_missing_targets else "COMPLETE",
         "research_only": True,
+        "path_cadence_hours": PATH_CADENCE_HOURS,
         "settled_path_missing_nominal_count": len(ordered),
         "settled_path_missing_nominal_times": ordered,
         "unsettled_missing_target_count": len(unsettled_missing_targets),

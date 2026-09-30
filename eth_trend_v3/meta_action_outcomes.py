@@ -13,6 +13,7 @@ from .tactical_outcomes import _canonical_1h_prices, _parse_time, load_tactical_
 
 EVENT_VERSION = "meta-action-v1"
 HORIZON_HOURS = (4, 12, 24, 72)
+PATH_CADENCE_HOURS = 4
 ACTIONS = ("ADD", "HOLD", "REDUCE", "AVOID")
 
 _BUY_DECISIONS = {"BUY", "STRONG BUY", "ADD", "ACCUMULATE"}
@@ -245,7 +246,8 @@ def build_due_meta_action_outcomes(
                 continue
 
             expected_path_times = [
-                nominal + timedelta(hours=offset) for offset in range(1, horizon + 1)
+                nominal + timedelta(hours=offset)
+                for offset in range(PATH_CADENCE_HOURS, horizon + 1, PATH_CADENCE_HOURS)
             ]
             missing_path_times = [
                 timestamp for timestamp in expected_path_times if timestamp not in prices
@@ -286,7 +288,8 @@ def build_due_meta_action_outcomes(
                         actual_return, int(event.get("tradingagents_reference_side") or 0)
                     ),
                     "path_bars": len(path_rows),
-                    "expected_path_bars": horizon,
+                    "expected_path_bars": horizon // PATH_CADENCE_HOURS,
+                    "path_cadence_hours": PATH_CADENCE_HOURS,
                     "path_complete": path_complete,
                     "missing_path_nominal_times": [
                         timestamp.isoformat() for timestamp in missing_path_times
