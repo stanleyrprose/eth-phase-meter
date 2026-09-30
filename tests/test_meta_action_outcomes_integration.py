@@ -27,3 +27,12 @@ def test_meta_action_migration_is_additive():
     assert "CREATE TABLE IF NOT EXISTS eth_meta_action_events" in text
     assert "CREATE TABLE IF NOT EXISTS eth_meta_action_outcomes" in text
     assert "CHECK (horizon_hours IN (4, 12, 24, 72))" in text
+
+def test_meta_action_outcome_revision_migration_is_append_only():
+    text = (ROOT / "migrations" / "007_meta_action_outcome_revisions.sql").read_text(
+        encoding="utf-8"
+    )
+    assert "CREATE TABLE IF NOT EXISTS eth_meta_action_outcome_revisions" in text
+    assert "PRIMARY KEY(event_id, horizon_hours, revision)" in text
+    assert "REFERENCES eth_meta_action_outcomes(event_id, horizon_hours)" in text
+    assert "UPDATE eth_meta_action_outcomes" not in text

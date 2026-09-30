@@ -173,3 +173,26 @@ def test_report_is_descriptive_and_does_not_select_a_winner():
         report["horizons"]["4"]["reference_alignment"]["meta_directional"]["mean_aligned_return"]
         == 0.03
     )
+
+def test_effective_outcomes_use_latest_valid_append_only_revision():
+    from eth_trend_v3.meta_action_outcomes import effective_meta_action_outcomes
+    base = [{"event_id": "e1", "horizon_hours": 12, "path_complete": False, "mae": None}]
+    revisions = [
+        {"event_id": "e1", "horizon_hours": 12, "revision": 1, "correction_reason": "cadence-v1",
+         "source_git_sha": "abc", "payload": {"event_id": "e1", "horizon_hours": 12, "path_complete": True, "mae": -0.01}},
+        {"event_id": "e1", "horizon_hours": 12, "revision": 2, "correction_reason": "cadence-v2",
+         "source_git_sha": "def", "payload": {"event_id": "e1", "horizon_hours": 12, "path_complete": True, "mae": -0.02}},
+    ]
+    result = effective_meta_action_outcomes(base, revisions)
+    assert result[0]["mae"] == -0.02
+    assert result[0]["outcome_revision"] == 2
+    assert result[0]["correction_source_git_sha"] == "def"
+
+def test_effective_outcomes_ignore_revision_with_mismatched_identity():
+    from eth_trend_v3.meta_action_outcomes import effective_meta_action_outcomes
+    base = [{"event_id": "e1", "horizon_hours": 12, "path_complete": False}]
+    revisions = [
+        {"event_id": "e1", "horizon_hours": 12, "revision": 1, "correction_reason": "bad",
+         "source_git_sha": "abc", "payload": {"event_id": "other", "horizon_hours": 12, "path_complete": True}},
+    ]
+    assert effective_meta_action_outcomes(base, revisions) == base
