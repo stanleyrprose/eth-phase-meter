@@ -1,6 +1,12 @@
 name: Meta Action Outcome Revision Plan
 on:
   workflow_dispatch:
+    inputs:
+      apply:
+        description: "Persist approved append-only revision=1 candidates"
+        required: true
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -21,8 +27,11 @@ jobs:
       - run: pip install -r requirements-ci.lock
       - name: Apply additive migrations
         run: python -m scripts.apply_migrations
-      - name: Plan append-only outcome revisions
-        run: python -m scripts.plan_meta_action_outcome_revisions --source-git-sha "${GITHUB_SHA}"
+      - name: Plan/apply append-only outcome revisions
+        run: |
+          args=(--source-git-sha "${GITHUB_SHA}")
+          if [[ "${{ inputs.apply }}" == "true" ]]; then args+=(--apply); fi
+          python -m scripts.plan_meta_action_outcome_revisions "${args[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

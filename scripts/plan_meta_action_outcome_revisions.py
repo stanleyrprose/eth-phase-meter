@@ -6,6 +6,8 @@ from eth_trend_v3.meta_action_outcomes import (
     build_due_meta_action_outcomes,
     load_meta_action_events,
     load_meta_action_outcomes,
+    load_meta_action_outcome_revisions,
+    persist_meta_action_outcome_revisions,
 )
 from eth_trend_v3.tactical_outcomes import load_tactical_price_records
 
@@ -69,6 +71,7 @@ def main():
     p=argparse.ArgumentParser(description="Plan append-only Meta Action outcome revisions.")
     p.add_argument("--database-url", default=os.getenv("DATABASE_URL"))
     p.add_argument("--source-git-sha", default=os.getenv("GITHUB_SHA"))
+    p.add_argument("--apply", action="store_true")
     p.add_argument("--report", default="eth_reports/governance/meta_action_outcome_revision_plan.json")
     a=p.parse_args()
     if not a.database_url: raise SystemExit("DATABASE_URL is required")
@@ -79,6 +82,23 @@ def main():
         load_tactical_price_records(a.database_url),
         source_git_sha=a.source_git_sha,
     )
+    if a.apply:
+        inserted = persist_meta_action_outcome_revisions(report["candidates"], a.database_url, revision=1)
+        report["apply"] = True
+        report["status"] = "APPLIED"
+        report["inserted_revision_count"] = inserted
+        revisions = load_meta_action_outcome_revisions(a.database_url)
+        revision_one_keys = {
+            (str(row["event_id"]), int(row["horizon_hours"]))
+            for row in revisions if int(row["revision"]) == 1
+        }
+        candidate_keys = {
+            (str(row["event_id"]), int(row["horizon_hours"])) for row in report["candidates"]
+        }
+        report["revision_one_count"] = len(revision_one_keys)
+        report["all_candidates_have_revision_one"] = candidate_keys <= revision_one_keys
+        if not report["all_candidates_have_revision_one"]:
+            raise RuntimeError("post-apply verification failed: candidate revision missing")
     target=Path(a.report); target.parent.mkdir(parents=True,exist_ok=True)
     target.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
     print(json.dumps(report,indent=2,sort_keys=True))
