@@ -36,3 +36,13 @@ def test_meta_action_outcome_revision_migration_is_append_only():
     assert "PRIMARY KEY(event_id, horizon_hours, revision)" in text
     assert "REFERENCES eth_meta_action_outcomes(event_id, horizon_hours)" in text
     assert "UPDATE eth_meta_action_outcomes" not in text
+
+
+def test_revision_workflow_requires_explicit_apply_input():
+    text = (ROOT / ".github" / "workflows" / "meta-action-outcome-revision-plan.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'apply:' in text
+    assert 'type: boolean' in text
+    assert 'default: false' in text
+    assert 'if [[ "${{ inputs.apply }}" == "true" ]]' in text

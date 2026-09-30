@@ -241,6 +241,40 @@ def load_meta_action_outcome_revisions(dsn: str | None = None) -> list[dict[str,
             ]
 
 
+def persist_meta_action_outcome_revisions(
+    candidates: Iterable[dict[str, Any]],
+    dsn: str | None = None,
+    *,
+    revision: int = 1,
+) -> int:
+    dsn = dsn or os.getenv("DATABASE_URL")
+    if not dsn:
+        return 0
+    import psycopg
+
+    inserted = 0
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            for candidate in candidates:
+                payload = dict(candidate.get("payload") or {})
+                event_id = str(candidate.get("event_id") or "")
+                horizon = int(candidate.get("horizon_hours") or 0)
+                if str(payload.get("event_id")) != event_id or int(payload.get("horizon_hours") or 0) != horizon:
+                    raise ValueError("revision payload identity mismatch")
+                cur.execute(
+                    "INSERT INTO eth_meta_action_outcome_revisions("
+                    "event_id,horizon_hours,revision,correction_reason,source_git_sha,payload"
+                    ") VALUES(%s,%s,%s,%s,%s,%s::jsonb) "
+                    "ON CONFLICT DO NOTHING RETURNING event_id",
+                    (event_id, horizon, revision, str(candidate["correction_reason"]),
+                     str(candidate["source_git_sha"]), json.dumps(payload, ensure_ascii=False, default=str)),
+                )
+                if cur.fetchone():
+                    inserted += 1
+        conn.commit()
+    return inserted
+
+
 def effective_meta_action_outcomes(
     base_outcomes: Iterable[dict[str, Any]],
     revisions: Iterable[dict[str, Any]],
@@ -537,7 +571,11 @@ def run_meta_action_outcome_cycle(
     due = build_due_meta_action_outcomes(events, pit_records, existing_keys=existing_keys)
     settled_now = persist_meta_action_outcomes(due, dsn)
     all_outcomes = load_meta_action_outcomes(dsn)
-    report = meta_action_outcome_report(events, all_outcomes)
+    revisions = load_meta_action_outcome_revisions(dsn)
+    effective_outcomes = effective_meta_action_outcomes(all_outcomes, revisions)
+    report = meta_action_outcome_report(events, effective_outcomes)
+    report["base_outcome_count"] = len(all_outcomes)
+    report["revision_count"] = len(revisions)
     report["event_record"] = event_record
     report["settled_now"] = settled_now
     report["due_candidates"] = len(due)
