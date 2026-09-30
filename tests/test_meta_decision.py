@@ -89,6 +89,26 @@ def test_current_like_state_stays_hold_without_inventing_probability():
     assert "probability_up" not in result
 
 
+def test_strong_bullish_phase_can_add_when_tradingagents_is_neutral():
+    monitor = {
+        "1h": _snapshot(22, momentum=35, order_flow=20, options=-10),
+        "4h": _snapshot(35, momentum=60, order_flow=45, options=-10),
+    }
+    result = _evaluate(monitor, _ta("HOLD"))
+    assert result["recommendation"] == "ADD"
+    assert "PHASE_BULLISH_TA_NEUTRAL" in result["reason_codes"]
+
+
+def test_strong_bearish_phase_can_reduce_when_tradingagents_is_neutral():
+    monitor = {
+        "1h": _snapshot(-18, momentum=-20, order_flow=-10, options=15),
+        "4h": _snapshot(-32, momentum=-30, order_flow=-25, options=20),
+    }
+    result = _evaluate(monitor, _ta("HOLD"))
+    assert result["recommendation"] == "REDUCE"
+    assert "PHASE_BEARISH_TA_NEUTRAL" in result["reason_codes"]
+
+
 def test_add_requires_cross_system_and_multitimeframe_confirmation():
     monitor = {
         "1h": _snapshot(22, momentum=35, order_flow=20, options=-10),
@@ -169,7 +189,7 @@ def test_kronos_shadow_support_is_visible_but_does_not_promote_hold():
         "4h": _snapshot(38, momentum=45, order_flow=50),
     }
     result = _evaluate(monitor, _ta("HOLD"), _kronos(score4=40))
-    assert result["recommendation"] == "HOLD"
+    assert result["recommendation"] == "ADD"
     assert result["shadow_evidence"]["kronos_alignment"] == "SUPPORTS"
     assert result["shadow_evidence"]["kronos_decision_active"] is False
     assert "KRONOS_SHADOW_SUPPORTS_PHASE" in result["reason_codes"]
@@ -183,6 +203,6 @@ def test_kronos_shadow_conflict_is_visible_but_does_not_override_meta_decision()
         "4h": _snapshot(38, momentum=45, order_flow=50),
     }
     result = _evaluate(monitor, _ta("HOLD"), _kronos(score4=-40))
-    assert result["recommendation"] == "HOLD"
+    assert result["recommendation"] == "ADD"
     assert result["shadow_evidence"]["kronos_alignment"] == "CONFLICTS"
     assert "KRONOS_SHADOW_CONFLICTS_WITH_PHASE" in result["reason_codes"]

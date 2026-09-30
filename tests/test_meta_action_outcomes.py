@@ -1,3 +1,5 @@
+import pytest
+
 from eth_trend_v3.meta_action_outcomes import (
     EVENT_VERSION,
     build_due_meta_action_outcomes,
@@ -108,12 +110,37 @@ def test_due_outcomes_use_exact_future_1h_pit_for_4h_and_12h():
     twelve = next(row for row in outcomes if row["horizon_hours"] == 12)
 
     assert four["target_price"] == 104.0
-    assert four["actual_return"] == 0.04
-    assert four["meta_aligned_return"] == 0.04
+    assert four["actual_return"] == pytest.approx(0.04)
+    assert four["meta_aligned_return"] == pytest.approx(0.04)
     assert four["path_complete"] is True
     assert twelve["target_price"] == 112.0
     assert twelve["path_bars"] == 12
     assert all(row["horizon_hours"] in {4, 12} for row in outcomes)
+
+
+def test_incomplete_path_keeps_exact_target_return_but_gates_mae_mfe():
+    event, _ = build_meta_action_event(
+        meta("ADD", "HOLD", 30),
+        monitor(price=100.0, direction_4h=30),
+        monitor_run_id=123,
+        monitor_git_sha="abc",
+    )
+    records = [
+        pit("2026-09-27T05:15:00+00:00", 101.0),
+        # 06:15 is deliberately missing.
+        pit("2026-09-27T07:15:00+00:00", 103.0),
+        pit("2026-09-27T08:15:00+00:00", 104.0),
+    ]
+    outcomes = build_due_meta_action_outcomes([event], records)
+    four = next(row for row in outcomes if row["horizon_hours"] == 4)
+
+    assert four["actual_return"] == pytest.approx(0.04)
+    assert four["target_price"] == 104.0
+    assert four["path_complete"] is False
+    assert four["path_bars"] == 3
+    assert four["mae"] is None
+    assert four["mfe"] is None
+    assert four["missing_path_nominal_times"] == ["2026-09-27T06:15:00+00:00"]
 
 
 def test_report_is_descriptive_and_does_not_select_a_winner():
