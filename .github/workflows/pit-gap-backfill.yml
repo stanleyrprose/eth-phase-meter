@@ -3,6 +3,14 @@ name: PIT Gap Backfill
 on:
   workflow_dispatch:
     inputs:
+      start:
+        description: "Exclusive UTC start of the PIT recovery window (ISO-8601)."
+        required: true
+        type: string
+      end:
+        description: "Exclusive UTC end of the PIT recovery window (ISO-8601)."
+        required: true
+        type: string
       apply:
         description: "Insert validated missing PIT rows. Leave false for audit-only dry run."
         required: true
@@ -45,16 +53,16 @@ jobs:
         if: inputs.apply != true
         run: >-
           python -m scripts.backfill_pit_gap
-          --start "2026-09-21T06:24:30.823993Z"
-          --end "2026-09-22T23:58:23.190352Z"
+          --start "${{ inputs.start }}"
+          --end "${{ inputs.end }}"
           --report eth_reports/governance/pit_gap_backfill.json
 
       - name: Apply validated PIT gap backfill
         if: inputs.apply == true
         run: >-
           python -m scripts.backfill_pit_gap
-          --start "2026-09-21T06:24:30.823993Z"
-          --end "2026-09-22T23:58:23.190352Z"
+          --start "${{ inputs.start }}"
+          --end "${{ inputs.end }}"
           --apply
           --report eth_reports/governance/pit_gap_backfill.json
 
