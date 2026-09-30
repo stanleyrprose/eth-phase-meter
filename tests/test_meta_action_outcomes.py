@@ -114,11 +114,13 @@ def test_due_outcomes_use_exact_future_1h_pit_for_4h_and_12h():
     assert four["meta_aligned_return"] == pytest.approx(0.04)
     assert four["path_complete"] is True
     assert twelve["target_price"] == 112.0
-    assert twelve["path_bars"] == 12
+    assert twelve["path_bars"] == 3
+    assert twelve["expected_path_bars"] == 3
+    assert twelve["path_cadence_hours"] == 4
     assert all(row["horizon_hours"] in {4, 12} for row in outcomes)
 
 
-def test_incomplete_path_keeps_exact_target_return_but_gates_mae_mfe():
+def test_missing_scheduled_4h_path_point_keeps_target_return_but_gates_mae_mfe():
     event, _ = build_meta_action_event(
         meta("ADD", "HOLD", 30),
         monitor(price=100.0, direction_4h=30),
@@ -126,22 +128,21 @@ def test_incomplete_path_keeps_exact_target_return_but_gates_mae_mfe():
         monitor_git_sha="abc",
     )
     records = [
-        pit("2026-09-27T05:15:00+00:00", 101.0),
-        # 06:15 is deliberately missing.
-        pit("2026-09-27T07:15:00+00:00", 103.0),
         pit("2026-09-27T08:15:00+00:00", 104.0),
+        # 12:15 is a scheduled 4H path point and is deliberately missing.
+        pit("2026-09-27T16:15:00+00:00", 112.0),
     ]
     outcomes = build_due_meta_action_outcomes([event], records)
-    four = next(row for row in outcomes if row["horizon_hours"] == 4)
+    twelve = next(row for row in outcomes if row["horizon_hours"] == 12)
 
-    assert four["actual_return"] == pytest.approx(0.04)
-    assert four["target_price"] == 104.0
-    assert four["path_complete"] is False
-    assert four["path_bars"] == 3
-    assert four["mae"] is None
-    assert four["mfe"] is None
-    assert four["missing_path_nominal_times"] == ["2026-09-27T06:15:00+00:00"]
-
+    assert twelve["actual_return"] == pytest.approx(0.12)
+    assert twelve["target_price"] == 112.0
+    assert twelve["path_complete"] is False
+    assert twelve["path_bars"] == 2
+    assert twelve["expected_path_bars"] == 3
+    assert twelve["mae"] is None
+    assert twelve["mfe"] is None
+    assert twelve["missing_path_nominal_times"] == ["2026-09-27T12:15:00+00:00"]
 
 def test_report_is_descriptive_and_does_not_select_a_winner():
     event, _ = build_meta_action_event(
