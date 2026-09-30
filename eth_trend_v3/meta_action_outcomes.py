@@ -213,6 +213,61 @@ def load_meta_action_outcomes(dsn: str | None = None) -> list[dict[str, Any]]:
             return [row[0] for row in cur.fetchall()]
 
 
+def load_meta_action_outcome_revisions(dsn: str | None = None) -> list[dict[str, Any]]:
+    dsn = dsn or os.getenv("DATABASE_URL")
+    if not dsn:
+        return []
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT event_id,horizon_hours,revision,correction_reason,"
+                "source_git_sha,payload "
+                "FROM eth_meta_action_outcome_revisions "
+                "ORDER BY event_id,horizon_hours,revision"
+            )
+            return [
+                {
+                    "event_id": event_id,
+                    "horizon_hours": int(horizon_hours),
+                    "revision": int(revision),
+                    "correction_reason": correction_reason,
+                    "source_git_sha": source_git_sha,
+                    "payload": payload,
+                }
+                for event_id, horizon_hours, revision, correction_reason, source_git_sha, payload
+                in cur.fetchall()
+            ]
+
+
+def effective_meta_action_outcomes(
+    base_outcomes: Iterable[dict[str, Any]],
+    revisions: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    effective = {
+        (str(row.get("event_id")), int(row.get("horizon_hours") or 0)): dict(row)
+        for row in base_outcomes
+    }
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    for revision in revisions:
+        key = (str(revision.get("event_id")), int(revision.get("horizon_hours") or 0))
+        if key not in effective:
+            continue
+        current = latest.get(key)
+        if current is None or int(revision.get("revision") or 0) > int(current.get("revision") or 0):
+            latest[key] = revision
+    for key, revision in latest.items():
+        payload = dict(revision.get("payload") or {})
+        if str(payload.get("event_id")) != key[0] or int(payload.get("horizon_hours") or 0) != key[1]:
+            continue
+        payload["outcome_revision"] = int(revision["revision"])
+        payload["correction_reason"] = str(revision["correction_reason"])
+        payload["correction_source_git_sha"] = str(revision["source_git_sha"])
+        effective[key] = payload
+    return list(effective.values())
+
+
 def _aligned(actual_return: float, side: int) -> float | None:
     return actual_return * side if side else None
 
