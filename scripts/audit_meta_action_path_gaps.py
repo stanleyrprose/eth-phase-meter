@@ -33,17 +33,37 @@ def build_gap_audit(events, outcomes, pit_records, *, now=None):
                     if nominal + timedelta(hours=i) not in prices
                 ]
                 for ts in missing:
-                    item = gaps.setdefault(ts.isoformat(), {"nominal_time": ts.isoformat(), "affected": []})
+                    item = gaps.setdefault(
+                        ts.isoformat(),
+                        {
+                            "nominal_time": ts.isoformat(),
+                            "reason_code": "MISSING_SOURCE_PIT",
+                            "recoverability": "NO_CANONICAL_PIT",
+                            "affected": [],
+                        },
+                    )
                     item["affected"].append({"event_id": event_id, "horizon_hours": horizon})
             elif target > now:
                 future_not_due.append({"event_id": event_id, "horizon_hours": horizon, "target_nominal_time": target.isoformat()})
             elif target not in prices:
-                unsettled_missing_targets.append({"event_id": event_id, "horizon_hours": horizon, "target_nominal_time": target.isoformat()})
+                unsettled_missing_targets.append({
+                    "event_id": event_id,
+                    "horizon_hours": horizon,
+                    "target_nominal_time": target.isoformat(),
+                    "reason_code": "MISSING_SOURCE_PIT",
+                    "recoverability": "NO_CANONICAL_PIT",
+                })
     ordered = sorted(gaps.values(), key=lambda x: x["nominal_time"])
     return {
         "status": "GAPS_FOUND" if ordered or unsettled_missing_targets else "COMPLETE",
         "research_only": True,
         "path_cadence_hours": PATH_CADENCE_HOURS,
+        "gap_reason_code": "MISSING_SOURCE_PIT" if ordered or unsettled_missing_targets else None,
+        "recovery_policy": {
+            "interpolation_allowed": False,
+            "nearest_value_substitution_allowed": False,
+            "historical_gap_requires_validated_source_artifact": True,
+        },
         "settled_path_missing_nominal_count": len(ordered),
         "settled_path_missing_nominal_times": ordered,
         "unsettled_missing_target_count": len(unsettled_missing_targets),

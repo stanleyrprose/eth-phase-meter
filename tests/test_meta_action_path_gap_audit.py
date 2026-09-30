@@ -19,10 +19,15 @@ def test_distinguishes_scheduled_path_gap_missing_target_and_future():
     ]
     report=build_gap_audit(events,outcomes,pits,now=datetime(2026,10,1,1,tzinfo=timezone.utc))
     assert report["path_cadence_hours"] == 4
+    assert report["gap_reason_code"] == "MISSING_SOURCE_PIT"
+    assert report["recovery_policy"]["interpolation_allowed"] is False
     assert report["settled_path_missing_nominal_count"] == 1
     assert report["settled_path_missing_nominal_times"][0]["nominal_time"] == "2026-09-30T08:15:00+00:00"
+    assert report["settled_path_missing_nominal_times"][0]["reason_code"] == "MISSING_SOURCE_PIT"
+    assert report["settled_path_missing_nominal_times"][0]["recoverability"] == "NO_CANONICAL_PIT"
     assert report["unsettled_missing_target_count"] == 1
     assert report["unsettled_missing_targets"][0]["horizon_hours"] == 24
+    assert report["unsettled_missing_targets"][0]["reason_code"] == "MISSING_SOURCE_PIT"
     assert report["future_not_due_count"] == 1
 
 def test_unscheduled_intermediate_hours_are_not_reported_as_gaps():
@@ -31,3 +36,4 @@ def test_unscheduled_intermediate_hours_are_not_reported_as_gaps():
     pits=[pit("2026-09-30T04:15:00+00:00")]
     report=build_gap_audit(events,outcomes,pits,now=datetime(2026,9,30,5,tzinfo=timezone.utc))
     assert report["settled_path_missing_nominal_count"] == 0
+    assert report["gap_reason_code"] is None
